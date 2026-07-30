@@ -1,12 +1,11 @@
 #!/usr/bin/env Rscript
 
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine run_all.R path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
-
-root <- dirname(get_script_path())
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+source(file.path(dirname(script_path), "R", "project_setup.R"))
+root <- find_project_root(dirname(script_path))
 old_working_directory <- setwd(root)
 on.exit(setwd(old_working_directory), add = TRUE)
 args <- commandArgs(trailingOnly = TRUE)

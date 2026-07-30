@@ -1,14 +1,17 @@
 #!/usr/bin/env Rscript
 
-# Figure 4 analysis: privacy-conscious case-pattern analysis of the incremental
-# contribution of global genetically inferred ancestry (GIA) to the random-
-# forest model that already includes parent-reported ethnicity (PRE).
-#
-# The script reconstructs the locked MMA cohort after excluding newborns
-# receiving TPN, joins it by validated ID,
-# joins saved out-of-fold (OOF) predictions from the four-model RF run, and
-# quantifies subject-level probability movement and operational reclassification
-# after adding continuous GIA proportions to the clinical/metabolite + PRE model.
+# Figure 4 analysis of prediction changes after adding GIA to the PRE model.
+
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+helper_dir <- file.path(dirname(script_path), "..", "R")
+source(file.path(helper_dir, "project_setup.R"))
+source(file.path(helper_dir, "ancestry_helpers.R"))
+source(file.path(helper_dir, "pre_helpers.R"))
+source(file.path(helper_dir, "statistical_helpers.R"))
+require_packages(c("data.table", "readxl", "ggplot2", "patchwork", "digest"))
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -17,20 +20,6 @@ suppressPackageStartupMessages({
   library(patchwork)
   library(digest)
 })
-
-required_packages <- c("data.table", "readxl", "ggplot2", "patchwork", "digest")
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-if (length(missing_packages) > 0L) {
-  stop("Missing required R packages: ", paste(missing_packages, collapse = ", "))
-}
-
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
 
 parse_args <- function(args) {
   defaults <- list(
@@ -48,7 +37,7 @@ parse_args <- function(args) {
     key <- gsub("-", "_", parts[[1]])
     if (!key %in% names(defaults)) stop("Unknown argument: --", parts[[1]])
     if (key %in% c("source_analysis", "source_run", "run_name")) {
-      if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", parts[[2]])) {
+      if (!is_run_name(parts[[2]])) {
         stop(key, " contains unsupported characters.")
       }
       defaults[[key]] <- parts[[2]]
@@ -65,9 +54,7 @@ parse_args <- function(args) {
   defaults
 }
 
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
 analysis_dir <- file.path(paths$results, "figure4_analysis")
 args <- parse_args(commandArgs(trailingOnly = TRUE))
@@ -82,10 +69,7 @@ table_dir <- file.path(run_dir, "tables")
 figure_dir <- file.path(run_dir, "figures")
 text_dir <- file.path(run_dir, "text")
 log_dir <- file.path(run_dir, "logs")
-dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(text_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(table_dir, figure_dir, text_dir, log_dir)
 
 log_file <- file.path(log_dir, "run.log")
 log_con <- file(log_file, open = "wt")
@@ -102,8 +86,10 @@ cat("Start time:", format(Sys.time(), tz = "America/New_York"), "\n")
 cat("Source RF run:", source_run_dir, "\n")
 cat("Output run:", run_dir, "\n")
 
+# Reconstruct the analysis cohort ----
+
 rel_path <- function(path) {
-  relative_to_release(path, project_root)
+  relative_to_project(path, project_root)
 }
 
 input_files <- c(
@@ -120,69 +106,19 @@ input_files <- c(
   ),
   source_run_manifest = file.path(source_table_dir, "run_manifest.csv")
 )
-missing_inputs <- input_files[!file.exists(input_files)]
-if (length(missing_inputs) > 0L) {
-  stop("Missing inputs: ", paste(missing_inputs, collapse = ", "))
-}
+require_files(input_files)
 
 input_checksums <- data.table(
   input = names(input_files),
   relative_path = vapply(input_files, rel_path, character(1)),
   bytes = as.numeric(file.info(input_files)$size),
-  sha256 = vapply(input_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+  sha256 = sha256_files(input_files)
 )
 fwrite(input_checksums, file.path(table_dir, "input_checksums.csv"))
 
 numeric_clean <- function(x) suppressWarnings(as.numeric(as.character(x)))
 
-read_and_validate_global_ancestry <- function(q_path, fam_path, psam_path, study_n = 378L) {
-  fam <- fread(fam_path, header = FALSE)
-  q <- fread(q_path, header = FALSE)
-  psam <- fread(psam_path)
-  if (nrow(fam) != nrow(q)) stop("FAM and Q row counts differ.")
-  if (ncol(q) != 5L) stop("Expected five ADMIXTURE components.")
-  reference_n <- nrow(fam) - study_n
-  if (reference_n != 2158L) stop("Expected 2,158 reference samples.")
-
-  psam_id_col <- grep("IID$", names(psam), value = TRUE)
-  if (length(psam_id_col) != 1L) stop("Could not uniquely identify IID in PSAM.")
-  setnames(psam, psam_id_col, "IID")
-
-  q_cols <- paste0("V", seq_len(5L))
-  reference <- data.table(IID = fam$V2[seq_len(reference_n)], q[seq_len(reference_n)])
-  reference <- merge(reference, psam[, .(IID, SuperPop)], by = "IID", all.x = TRUE, sort = FALSE)
-  if (anyNA(reference$SuperPop)) stop("Reference IDs are missing from PSAM metadata.")
-  reference_means <- reference[, lapply(.SD, mean), by = SuperPop, .SDcols = q_cols]
-  expected_components <- c("AFR", "AMR", "EAS", "EUR", "SAS")
-  if (!setequal(reference_means$SuperPop, expected_components)) stop("Unexpected superpopulations.")
-
-  mapping <- reference_means[, {
-    values <- unlist(.SD)
-    index <- which.max(values)
-    .(q_column = names(values)[index], mean_reference_membership = values[index])
-  }, by = SuperPop, .SDcols = q_cols]
-  if (uniqueN(mapping$q_column) != 5L) stop("Component mapping is not one-to-one.")
-  if (any(mapping$mean_reference_membership < 0.95)) stop("Component mapping is insufficiently separated.")
-
-  study_rows <- (reference_n + 1L):nrow(fam)
-  study_ids <- as.character(fam$V2[study_rows])
-  raw_p04 <- grepl("^p04w", study_ids)
-  if (sum(raw_p04) != 48L) stop("Unexpected number of unprefixed p04 study IDs.")
-  study_ids[raw_p04] <- paste0("NBSfalsepos_", study_ids[raw_p04])
-  if (anyDuplicated(study_ids)) stop("Duplicate normalized study IDs.")
-
-  study <- as.data.table(q[study_rows])
-  q_to_label <- setNames(mapping$SuperPop, mapping$q_column)
-  setnames(study, q_cols, unname(q_to_label[q_cols]))
-  study[, raw_id := study_ids]
-  setcolorder(study, c("raw_id", expected_components))
-  if (max(abs(rowSums(study[, ..expected_components]) - 1)) > 5e-4) {
-    stop("Study ancestry proportions do not sum to 1 within tolerance.")
-  }
-  list(study = study, mapping = mapping[order(SuperPop)])
-}
-
-global_ancestry <- read_and_validate_global_ancestry(
+global_ancestry <- read_global_ancestry(
   input_files[["admixture_q"]],
   input_files[["admixture_fam"]],
   input_files[["reference_metadata"]]
@@ -203,29 +139,18 @@ if (!identical(as.character(phenotype[[id_col]]), global_ancestry$study$raw_id))
 }
 
 pre_columns <- paste0("RACE_ETH_", 1:4)
-east_asian_categories <- c("Japanese", "Chinese", "Laos", "Korean", "Vietnamese", "Filipino")
-south_asian_categories <- c("Asian East Indian")
 for (column in pre_columns) {
   values <- as.character(phenotype[[column]])
-  values[values %in% east_asian_categories] <- "EAS"
-  values[values %in% south_asian_categories] <- "SAS"
+  values[values %in% east_asian_pre_labels] <- "EAS"
+  values[values %in% south_asian_pre_labels] <- "SAS"
   set(phenotype, j = column, value = values)
 }
 
-clean_pre_values <- function(x) unique(x[!is.na(x) & nzchar(x)])
-collapse_pre <- function(x) {
-  x <- clean_pre_values(x)
-  if ("Hispanic" %in% x) return("Hispanic")
-  if ("Black" %in% x) return("Black")
-  if ("EAS" %in% x) return("EAS")
-  if ("SAS" %in% x) return("SAS")
-  if ("Middle Eastern" %in% x) return("Middle Eastern")
-  if ("Native American" %in% x) return("Native American")
-  if (length(x) == 1L && identical(x, "White")) return("White")
-  "Other/Unknown"
-}
-phenotype[, PRE_category := apply(.SD, 1, collapse_pre), .SDcols = pre_columns]
-phenotype[, n_PRE_selections := apply(.SD, 1, function(x) length(clean_pre_values(x))), .SDcols = pre_columns]
+phenotype[, PRE_category := apply(.SD, 1, assign_pre), .SDcols = pre_columns]
+phenotype[
+  , n_PRE_selections := apply(.SD, 1, function(x) length(normalize_pre_values(x))),
+  .SDcols = pre_columns
+]
 phenotype[, PRE_reporting := fifelse(n_PRE_selections > 1L, "Multiple PRE", "Single PRE")]
 
 metabolite_features <- c(
@@ -280,7 +205,7 @@ eligible <- joined$mma_evaluable & joined$mma_screen_positive &
   complete.cases(full_matrix_all)
 model_data <- joined[eligible]
 if (nrow(model_data) != 117L || sum(model_data$outcome == "TP") != 85L || sum(model_data$outcome == "FP") != 32L) {
-  stop("Locked cohort did not reproduce 117 newborns (85 TP, 32 FP).")
+  stop("Cohort did not reproduce 117 newborns (85 TP, 32 FP).")
 }
 
 sorted_ids <- sort(model_data[[id_col]])
@@ -361,6 +286,9 @@ subject <- merge(
   sort = FALSE
 )
 if (nrow(subject) != 117L) stop("OOF prediction join did not reproduce 117 subjects.")
+
+# Prediction shifts and operating points ----
+
 subject[, outcome_numeric := as.integer(outcome == "TP")]
 subject[, probability_change := p_both - p_pre]
 subject[, correct_direction_shift := fifelse(outcome == "TP", probability_change, -probability_change)]
@@ -405,32 +333,8 @@ restricted_subject_path <- file.path(
 )
 fwrite(subject, restricted_subject_path)
 
-discrete_operating_point <- function(outcome, probability, target_sensitivity) {
-  thresholds <- sort(unique(probability), decreasing = TRUE)
-  candidates <- rbindlist(lapply(thresholds, function(threshold) {
-    positive <- probability >= threshold
-    tp <- sum(positive & outcome == "TP")
-    fn <- sum(!positive & outcome == "TP")
-    tn <- sum(!positive & outcome == "FP")
-    fp <- sum(positive & outcome == "FP")
-    data.table(
-      threshold = threshold,
-      tp = tp,
-      fn = fn,
-      tn = tn,
-      fp = fp,
-      sensitivity = tp / (tp + fn),
-      specificity = tn / (tn + fp)
-    )
-  }))
-  candidates <- candidates[sensitivity >= target_sensitivity]
-  if (nrow(candidates) == 0L) stop("No threshold attains target sensitivity.")
-  setorder(candidates, -specificity, -threshold)
-  candidates[1]
-}
-
-op_pre <- discrete_operating_point(subject$outcome, subject$p_pre, args$target_sensitivity)
-op_both <- discrete_operating_point(subject$outcome, subject$p_both, args$target_sensitivity)
+op_pre <- operating_point(subject$outcome, subject$p_pre, args$target_sensitivity)
+op_both <- operating_point(subject$outcome, subject$p_both, args$target_sensitivity)
 operating_points <- rbind(
   cbind(model = model_names[["pre"]], op_pre),
   cbind(model = model_names[["both"]], op_both)
@@ -482,10 +386,12 @@ fwrite(operational_transitions, file.path(table_dir, "operational_reclassificati
 # dispositions. The publication figure uses only aggregate transition counts.
 fwrite(subject, restricted_subject_path)
 
+# Stability and subgroup summaries ----
+
 repeat_operating <- rbindlist(lapply(unique(repeat_wide$repeat_id), function(repeat_id_value) {
   repeat_data <- repeat_wide[repeat_id == repeat_id_value]
-  repeat_pre <- discrete_operating_point(repeat_data$outcome, repeat_data$p_pre, args$target_sensitivity)
-  repeat_both <- discrete_operating_point(repeat_data$outcome, repeat_data$p_both, args$target_sensitivity)
+  repeat_pre <- operating_point(repeat_data$outcome, repeat_data$p_pre, args$target_sensitivity)
+  repeat_both <- operating_point(repeat_data$outcome, repeat_data$p_both, args$target_sensitivity)
   data.table(
     repeat_id = repeat_id_value,
     pre_sensitivity = repeat_pre$sensitivity,
@@ -626,6 +532,8 @@ raw_score_associations <- rbindlist(lapply(c("TP", "FP"), function(outcome_group
   )
 }))
 fwrite(raw_score_associations, file.path(table_dir, "raw_score_change_associations.csv"))
+
+# Figure source tables and plot ----
 
 individual_plot_source <- subject[, .(
   analysis_id, outcome, correct_direction_shift, benefit_direction,
@@ -795,6 +703,8 @@ png_path <- file.path(figure_dir, "Figure4_GIA_incremental_case_patterns_analysi
 ggsave(pdf_path, figure, width = 10.5, height = 13.0, device = cairo_pdf, bg = "white")
 ggsave(png_path, figure, width = 10.5, height = 13.0, dpi = 300, bg = "white")
 
+# Aggregate report ----
+
 high_confidence_label <- paste0(
   "Largest GIA component >", round(args$confidence_cutoff * 100), "%"
 )
@@ -872,7 +782,7 @@ output_files <- c(
 output_manifest <- data.table(
   relative_path = vapply(output_files, rel_path, character(1)),
   bytes = as.numeric(file.info(output_files)$size),
-  sha256 = vapply(output_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+  sha256 = sha256_files(output_files)
 )
 fwrite(output_manifest, file.path(run_dir, "output_manifest.csv"))
 

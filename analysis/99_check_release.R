@@ -1,17 +1,19 @@
 #!/usr/bin/env Rscript
 
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
-
-script_path <- get_script_path()
-root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
+root <- find_project_root(dirname(script_path))
 
 required_files <- c(
   "DESCRIPTION", ".gitignore", "README.md", "Makefile", "run_all.R",
-  "R/project_paths.R", "config/input_manifest.csv",
+  file.path("R", c(
+    "project_setup.R", "ancestry_helpers.R", "pre_helpers.R",
+    "statistical_helpers.R", "plot_helpers.R"
+  )),
+  "config/input_manifest.csv",
   "config/software_versions.csv", "data/raw/README.md",
   "resources/figure1_layout.tex.in",
   "results/README.md", "docs/ANALYSIS_MAP.md", "docs/PRIVACY.md",
@@ -114,7 +116,7 @@ if (length(missing_ignore_rules) > 0L) {
 }
 
 description <- read.dcf(file.path(root, "DESCRIPTION"))
-if (!identical(unname(description[1, "Version"]), "0.1.0")) {
+if (!identical(unname(description[1, "Version"]), "0.2.0")) {
   stop("Unexpected release version in DESCRIPTION.")
 }
 

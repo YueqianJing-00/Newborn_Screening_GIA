@@ -2,6 +2,13 @@
 
 # Figure 3: cross-validated performance and held-out permutation importance.
 
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
+require_packages(c("data.table", "ggplot2", "patchwork", "digest"))
+
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)
@@ -9,26 +16,7 @@ suppressPackageStartupMessages({
   library(digest)
 })
 
-required_packages <- c("data.table", "ggplot2", "patchwork", "digest")
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-if (length(missing_packages) > 0L) {
-  stop(
-    "Missing required R packages: ", paste(missing_packages, collapse = ", "),
-    ". Install them in the project environment before running this script."
-  )
-}
-
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
-
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
 analysis_dir <- file.path(paths$results, "figure3")
 source_analysis_dir <- file.path(
@@ -37,11 +25,12 @@ source_analysis_dir <- file.path(
 source_table_dir <- file.path(source_analysis_dir, "tables")
 output_table_dir <- file.path(analysis_dir, "tables")
 output_figure_dir <- file.path(analysis_dir, "figures")
-dir.create(output_table_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(output_figure_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(output_table_dir, output_figure_dir)
+
+# Model source tables ----
 
 rel_path <- function(path) {
-  relative_to_release(path, project_root)
+  relative_to_project(path, project_root)
 }
 
 required_tables <- c(
@@ -66,7 +55,7 @@ input_checksums <- data.table(
   source_table = names(required_paths),
   relative_path = vapply(required_paths, rel_path, character(1)),
   bytes = as.numeric(file.info(required_paths)$size),
-  sha256 = vapply(required_paths, digest::digest, character(1), file = TRUE, algo = "sha256")
+  sha256 = sha256_files(required_paths)
 )
 fwrite(input_checksums, file.path(output_table_dir, "source_table_checksums.csv"))
 
@@ -86,7 +75,7 @@ if (
     cohort_summary$metabolite_candidates != 40L ||
     cohort_summary$metabolites_selected_per_fold != 10L
 ) {
-  stop("Source analysis does not match the locked 117-subject/top-10 protocol.")
+  stop("Source analysis does not match the 117-subject/top-10 protocol.")
 }
 if (!all(c("FC", "C3_C2") %in% metabolite_selection$metabolite)) {
   stop("FC and C3/C2 are absent from the metabolite candidate ledger.")
@@ -99,14 +88,14 @@ model_order <- c(
   "Clinical + metabolites + PRE + GIA"
 )
 if (!setequal(unique(performance_plot_source$model), model_order)) {
-  stop("Panel A does not contain the prespecified four models.")
+  stop("Panel A does not contain the four expected models.")
 }
 if (uniqueN(performance_plot_source$repeat_id) != 100L) {
   stop("Panel A does not contain 100 cross-validation repeats.")
 }
 
 if (!"GIA_grouped" %in% importance_plot_source$group_id) {
-  stop("Panel B does not contain the prespecified grouped GIA importance row.")
+  stop("Panel B does not contain the grouped GIA importance row.")
 }
 if (any(grepl("^GIA_(AFR|AMR|EAS|EUR)$", importance_plot_source$group_id))) {
   stop("Panel B unexpectedly contains individual GIA importance rows.")
@@ -130,6 +119,8 @@ importance_colors <- c(
   PRE = "#0072B2",
   GIA = "#D55E00"
 )
+
+# Figure panels ----
 
 theme_publication <- function(base_size = 10) {
   theme_classic(base_size = base_size, base_family = "Helvetica") +
@@ -289,7 +280,7 @@ output_files <- output_files[file.exists(output_files)]
 output_manifest <- data.table(
   relative_path = vapply(output_files, rel_path, character(1)),
   bytes = as.numeric(file.info(output_files)$size),
-  sha256 = vapply(output_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+  sha256 = sha256_files(output_files)
 )
 fwrite(output_manifest, file.path(analysis_dir, "output_manifest_sha256.csv"))
 

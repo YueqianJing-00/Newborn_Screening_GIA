@@ -1,63 +1,68 @@
-# HGG Advances newborn-screening analysis code
+# Newborn screening and genetic ancestry analysis
 
-This directory is a GitHub-ready, privacy-conscious release of the analysis code used by the current manuscript. It separates the final analysis from superseded development versions and keeps controlled-access participant data and subject-level outputs outside version control.
+This repository contains the R code used to compare parent-reported ethnicity
+(PRE) with genetically inferred ancestry (GIA) in newborn-screening referrals.
+It also contains the MMA random-forest analysis reported in the manuscript.
+Participant data and individual-level results are not included.
 
-The code reproduces:
+The analyses cover:
 
-1. PRE–GIA descriptive analyses in 378 sequenced screen-positive newborns.
-2. Cohort characteristics and manuscript Figures 1 and 2.
-3. The leakage-controlled random-forest analysis in 117 MMA screen-positive newborns after excluding newborns receiving TPN.
-4. Manuscript Figures 3 and 4 and independent checks of the model outputs.
+1. PRE-GIA concordance in 378 sequenced screen-positive newborns.
+2. Cohort characteristics and Figures 1 and 2.
+3. Random-forest models in 117 MMA screen-positive newborns after excluding
+   newborns receiving total parenteral nutrition (TPN).
+4. Model validation and Figures 3 and 4.
 
-## Repository structure
+## Project layout
 
 ```text
-analysis/       Numbered analysis and figure scripts
-R/              Shared path helpers
-config/         Input and software manifests
-data/raw/       Local controlled-access inputs; ignored by Git
-docs/           Analysis map, privacy rules, and release checklist
-results/        Generated outputs; ignored by Git by default
-run_all.R       Ordered pipeline runner
+analysis/   Scripts run in manuscript order
+R/          Shared data, statistics, plotting, and path helpers
+config/     Input-file and software-version records
+data/raw/   Local input data (ignored by Git)
+docs/       Workflow and data-release notes
+resources/  Figure layout template
+results/    Generated files (ignored by Git)
+run_all.R   Pipeline entry point
 ```
+
+The role of each numbered script is listed in
+[`docs/ANALYSIS_MAP.md`](docs/ANALYSIS_MAP.md).
 
 ## Requirements
 
-The locked analyses used R 4.5.1. Direct package versions are recorded in `config/software_versions.csv` and minimum versions are listed in `DESCRIPTION`.
+The manuscript analysis used R 4.5.1. Package versions are recorded in
+[`config/software_versions.csv`](config/software_versions.csv), and the required
+packages are listed in [`DESCRIPTION`](DESCRIPTION).
 
-Place the six expected input files in `data/raw/`, or point to an existing controlled-access directory:
+Place the six input files listed in
+[`config/input_manifest.csv`](config/input_manifest.csv) in `data/raw/`. To keep
+the data elsewhere, set:
 
 ```sh
 export HGG_DATA_DIR="/secure/path/to/input/files"
 ```
 
-The required filenames and their roles are listed in `config/input_manifest.csv`. Raw inputs are deliberately not included.
-
-## Running the code
-
-Run static, privacy, and syntax checks:
+Commands below assume the repository root is the working directory.
 
 ```sh
+# Check file structure, R syntax, and privacy rules
 Rscript run_all.R --mode=check
-```
 
-Run the complete pipeline in manuscript order:
-
-```sh
+# Run all analyses in order
 Rscript run_all.R --mode=full
 ```
 
-By default, outputs are written below `results/`. To use another private output location, set `HGG_RESULTS_DIR` before running.
+Results are written to `results/` unless `HGG_RESULTS_DIR` is set. The full model
+is the slowest step: it uses 100 repeated stratified 10-fold cross-validation
+runs, 1,000 trees per forest, and 2,000 subject-level bootstrap samples.
 
-The full model uses 100 repeated stratified 10-fold cross-validation runs, 1,000 trees per forest, training-fold selection of 10 from 40 metabolite candidates, and 2,000 outcome-stratified subject bootstrap samples. It is computationally heavier than the descriptive scripts.
+Within each training fold, the model ranks 40 metabolite candidates by the
+absolute distance of their univariate AUC from 0.5 and selects the top 10. FC and
+C3/C2 are included in this candidate set but are not forced into the model.
 
-## Data and privacy
+## Data release
 
-Do not commit the phenotype workbook, FAM/Q/PSAM files, fold assignments, subject-level predictions, bootstrap weights, or any file containing `restricted_internal` in its name. Generated results remain ignored until each aggregate file is reviewed for public release. See `docs/PRIVACY.md`.
-
-## Provenance
-
-The scientific logic was copied from the locked manuscript scripts. Changes in this release are organizational: portable input/output paths, clearer filenames, removal of legacy version labels, and Git/privacy safeguards. The original-to-release mapping is in `docs/ANALYSIS_MAP.md`.
-
-No Git repository or GitHub remote has been created yet. Complete `docs/RELEASE_CHECKLIST.md` before the first public push.
-
+Raw data, fold assignments, subject-level predictions, and individual ancestry
+profiles must remain outside Git. See [`docs/PRIVACY.md`](docs/PRIVACY.md) before
+adding any generated result to the repository.

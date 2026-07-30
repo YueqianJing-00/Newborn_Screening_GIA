@@ -1,15 +1,11 @@
-# GitHub release checklist
+# Release checklist
 
-- [ ] Confirm the manuscript title and repository name.
-- [ ] Confirm the author/maintainer metadata.
+- [ ] Confirm the manuscript title and author metadata.
 - [ ] Choose a software license with the study team or institution.
-- [ ] Confirm whether the repository should be public immediately or private through peer review.
-- [ ] Obtain approval for every aggregate table or figure proposed for release.
-- [ ] Keep all raw and individual-level files outside the repository.
+- [ ] Confirm that every tracked result is approved for public release.
+- [ ] Keep raw data and individual-level derivatives outside the repository.
 - [ ] Run `Rscript run_all.R --mode=check`.
-- [ ] Reproduce the full pipeline in a clean local results directory.
-- [ ] Compare final aggregate estimates and figure checksums with the locked manuscript outputs.
-- [ ] Initialize Git only after the above checks pass.
-- [ ] Review staged filenames and file contents before the first push.
-- [ ] Create a tagged release corresponding to the accepted manuscript version.
-
+- [ ] Run the full pipeline in a clean results directory.
+- [ ] Compare the main estimates with the manuscript tables.
+- [ ] Review staged filenames and file contents before pushing.
+- [ ] Tag the code version used for the accepted manuscript.

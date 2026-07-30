@@ -1,25 +1,29 @@
 #!/usr/bin/env Rscript
 
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+helper_dir <- file.path(dirname(script_path), "..", "R")
+source(file.path(helper_dir, "project_setup.R"))
+source(file.path(helper_dir, "ancestry_helpers.R"))
+source(file.path(helper_dir, "pre_helpers.R"))
+require_packages(c("data.table", "digest", "readxl"))
+
 suppressPackageStartupMessages({
   library(data.table)
   library(digest)
   library(readxl)
 })
 
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
-
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
 input_dir <- paths$data
 analysis_dir <- file.path(paths$results, "cohort_characteristics")
 table_dir <- file.path(analysis_dir, "tables")
-dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(table_dir)
+
+# Read and match the cohort ----
 
 input_files <- c(
   phenotype_workbook = file.path(
@@ -28,17 +32,13 @@ input_files <- c(
   joint_fam = file.path(input_dir, "1000G_378.fam"),
   reference_selection = file.path(input_dir, "sample_pure.txt")
 )
-stopifnot(all(file.exists(input_files)))
+require_files(input_files)
 
 input_checksums <- data.frame(
   input = names(input_files),
   file = basename(input_files),
   bytes = as.numeric(file.info(input_files)$size),
-  sha256 = vapply(
-    input_files,
-    function(path) digest(file = path, algo = "sha256", serialize = FALSE),
-    character(1)
-  ),
+  sha256 = sha256_files(input_files),
   stringsAsFactors = FALSE
 )
 write.csv(
@@ -63,15 +63,14 @@ stopifnot(
 is_reference <- fam$V2 %in% reference_selection$V1
 stopifnot(sum(is_reference) == 2158L, sum(!is_reference) == 378L)
 
-canonical_sample_key <- function(x) sub("^NBSfalsepos_", "", as.character(x))
 phenotype_ids <- as.character(phenotype[["NBS-sample-ID"]])
 study_ids <- as.character(fam$V2[!is_reference])
 
 study_match <- match(study_ids, phenotype_ids)
 unmatched <- is.na(study_match)
 study_match[unmatched] <- match(
-  canonical_sample_key(study_ids[unmatched]),
-  canonical_sample_key(phenotype_ids)
+  canonical_sample_id(study_ids[unmatched]),
+  canonical_sample_id(phenotype_ids)
 )
 stopifnot(
   !anyNA(study_match),
@@ -80,38 +79,27 @@ stopifnot(
 )
 cohort <- phenotype[study_match, , drop = FALSE]
 
+# Derive table variables ----
+
 race_columns <- paste0("RACE_ETH_", 1:4)
 stopifnot(all(race_columns %in% names(cohort)))
-
-eas_labels <- c("Japanese", "Chinese", "Laos", "Korean", "Vietnamese", "Filipino")
-sas_labels <- "Asian East Indian"
-
-clean_pre_values <- function(values) {
-  values <- trimws(as.character(values))
-  values <- values[!is.na(values) & nzchar(values)]
-  values[values %in% eas_labels] <- "East Asian"
-  values[values %in% sas_labels] <- "South Asian"
-  unique(values)
-}
-
-assign_pre_v8 <- function(values) {
-  values <- clean_pre_values(values)
-  if ("Hispanic" %in% values) return("Hispanic")
-  if ("Black" %in% values) return("Black")
-  if ("East Asian" %in% values) return("East Asian")
-  if ("South Asian" %in% values) return("South Asian")
-  if ("Middle Eastern" %in% values) return("Middle Eastern")
-  if ("Native American" %in% values) return("Native American")
-  if (identical(values, "White")) return("White")
-  "Other/Unknown"
-}
 
 pre_levels <- c(
   "Hispanic", "White", "East Asian", "Black", "Other/Unknown",
   "Middle Eastern", "South Asian", "Native American"
 )
 
-assigned_pre <- apply(cohort[, race_columns, drop = FALSE], 1, assign_pre_v8)
+assigned_pre <- apply(
+  cohort[, race_columns, drop = FALSE],
+  1,
+  assign_pre,
+  hierarchy = c(
+    "Hispanic", "Black", "East Asian", "South Asian", "Middle Eastern",
+    "Native American", "White"
+  ),
+  east_asian_label = "East Asian",
+  south_asian_label = "South Asian"
+)
 reported_pre_count <- apply(
   cohort[, race_columns, drop = FALSE],
   1,
@@ -214,7 +202,7 @@ table_rows <- rbind(
   section_row("Outcome"),
   data_row("True positive", format_count(sum(outcome == "True positive"))),
   data_row("False positive", format_count(sum(outcome == "False positive"))),
-  section_row("Parent-reported ethnicity (PRE), v8 hierarchy"),
+  section_row("Parent-reported ethnicity (PRE)"),
   do.call(
     rbind,
     lapply(
@@ -265,9 +253,7 @@ write.csv(
   row.names = FALSE
 )
 
-# -----------------------------------------------------------------------------
-# Reference-style subgroup table: false-positive versus true-positive referrals
-# -----------------------------------------------------------------------------
+# Characteristics by referral outcome ----
 
 gestational_week <- floor(gestational_days / 7)
 gestational_week[
@@ -444,6 +430,8 @@ write.csv(
   row.names = FALSE
 )
 
+# Run records ----
+
 run_manifest <- data.frame(
   item = c(
     "run_date",
@@ -489,7 +477,7 @@ report_lines <- c(
   "- Categorical values are n (%) using N = 378.",
   "- Birth weight and age at blood collection are median (IQR) because age at collection is right-skewed.",
   "- Available-case denominators are 375 for birth weight and 375 for age at blood collection.",
-  "- PRE uses the prespecified hierarchy and reproduces the manuscript counts.",
+  "- PRE uses the hierarchy described in the Methods.",
   "- TPN missing/invalid combines blank or NA values with code 998; no raw values were changed.",
   "- The stratified table reports percentages within the false-positive (n=143) and true-positive (n=235) columns.",
   "- Gestational age was derived from GA_DAYS as completed weeks. Blank values and four records outside 140-315 days were classified as unknown/invalid.",

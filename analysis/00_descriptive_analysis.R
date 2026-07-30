@@ -1,7 +1,23 @@
 #!/usr/bin/env Rscript
 
-# Reproducible PRE-GIA descriptive analyses used by the manuscript.
-# Raw inputs remain outside version control. Outputs are written below results/.
+# PRE-GIA descriptive analysis for the full sequenced cohort.
+
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+helper_dir <- file.path(dirname(script_path), "..", "R")
+source(file.path(helper_dir, "project_setup.R"))
+source(file.path(helper_dir, "ancestry_helpers.R"))
+source(file.path(helper_dir, "pre_helpers.R"))
+source(file.path(helper_dir, "statistical_helpers.R"))
+source(file.path(helper_dir, "plot_helpers.R"))
+
+required_packages <- c(
+  "data.table", "digest", "dplyr", "ggplot2", "patchwork", "ragg",
+  "readxl", "scales", "tidyr"
+)
+require_packages(required_packages)
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -13,33 +29,13 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-required_packages <- c(
-  "data.table", "digest", "dplyr", "ggplot2", "patchwork", "ragg",
-  "readxl", "scales", "tidyr"
-)
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-if (length(missing_packages) > 0) {
-  stop("Missing required R packages: ", paste(missing_packages, collapse = ", "))
-}
-
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
-
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
 input_dir <- paths$data
 analysis_dir <- file.path(paths$results, "descriptive")
 table_dir <- file.path(analysis_dir, "tables")
 figure_dir <- file.path(analysis_dir, "figures")
-dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(table_dir, figure_dir)
 
 seed <- 20260710L
 bootstrap_replicates <- 10000L
@@ -55,21 +51,12 @@ input_files <- c(
   reference_metadata = file.path(input_dir, "all_phase3.psam"),
   reference_selection_q = file.path(input_dir, "gwas_ld_pruned.5.Q")
 )
-missing_inputs <- input_files[!file.exists(input_files)]
-if (length(missing_inputs) > 0) {
-  stop("Missing required inputs: ", paste(missing_inputs, collapse = ", "))
-}
+require_files(input_files)
 
 input_checksums <- data.frame(
   input_role = names(input_files),
   file = basename(input_files),
-  sha256 = vapply(
-    input_files,
-    digest::digest,
-    character(1),
-    algo = "sha256",
-    file = TRUE
-  ),
+  sha256 = sha256_files(input_files),
   stringsAsFactors = FALSE
 )
 write.csv(
@@ -78,9 +65,7 @@ write.csv(
   row.names = FALSE
 )
 
-# -----------------------------------------------------------------------------
-# Read and validate inputs
-# -----------------------------------------------------------------------------
+# Read and validate inputs ----
 
 phenotype <- read_excel(
   input_files[["phenotype_workbook"]],
@@ -119,16 +104,15 @@ stopifnot(setequal(reference_ids_in_joint_order, reference_selection$IID))
 
 # Resolve the historical false-positive prefix mismatch by a validated key,
 # not by fixed row positions.
-canonical_sample_key <- function(x) sub("^NBSfalsepos_", "", as.character(x))
 phenotype_ids <- as.character(phenotype[["NBS-sample-ID"]])
-stopifnot(!anyDuplicated(canonical_sample_key(phenotype_ids)))
+stopifnot(!anyDuplicated(canonical_sample_id(phenotype_ids)))
 
 study_ids_raw <- as.character(fam$V2[!is_reference])
 study_match <- match(study_ids_raw, phenotype_ids)
 unmatched <- is.na(study_match)
 study_match[unmatched] <- match(
-  canonical_sample_key(study_ids_raw[unmatched]),
-  canonical_sample_key(phenotype_ids)
+  canonical_sample_id(study_ids_raw[unmatched]),
+  canonical_sample_id(phenotype_ids)
 )
 stopifnot(!anyNA(study_match), !anyDuplicated(study_match), length(study_match) == 378L)
 cohort_raw <- phenotype[study_match, , drop = FALSE]
@@ -166,17 +150,6 @@ reference_q_validation <- reference_q %>%
   group_by(SuperPop) %>%
   summarise(across(all_of(joint_component_order), mean), .groups = "drop")
 
-validate_component_mapping <- function(summary_table, ancestry_columns) {
-  observed <- ancestry_columns[
-    max.col(as.matrix(summary_table[, ancestry_columns, drop = FALSE]))
-  ]
-  if (!identical(as.character(summary_table$SuperPop), observed)) {
-    stop(
-      "Ancestry component mapping failed validation. Expected superpopulation ",
-      "to be the largest mean component in its reference group."
-    )
-  }
-}
 validate_component_mapping(joint_reference_validation, joint_component_order)
 validate_component_mapping(reference_q_validation, joint_component_order)
 
@@ -234,47 +207,10 @@ write.csv(
   row.names = FALSE
 )
 
-# -----------------------------------------------------------------------------
-# Freeze the manuscript-v8 SRE hierarchy and construct descriptive variables
-# -----------------------------------------------------------------------------
+# Construct PRE and ancestry variables ----
 
 race_columns <- paste0("RACE_ETH_", 1:4)
 stopifnot(all(race_columns %in% names(cohort_raw)))
-
-eas_labels <- c("Japanese", "Chinese", "Laos", "Korean", "Vietnamese", "Filipino")
-sas_labels <- "Asian East Indian"
-
-clean_sre_values <- function(values) {
-  values <- trimws(as.character(values))
-  values <- values[!is.na(values) & nzchar(values)]
-  values[values %in% eas_labels] <- "EAS"
-  values[values %in% sas_labels] <- "SAS"
-  unique(values)
-}
-
-assign_sre_v8 <- function(values) {
-  values <- clean_sre_values(values)
-  if ("Hispanic" %in% values) return("Hispanic")
-  if ("Black" %in% values) return("Black")
-  if ("EAS" %in% values) return("EAS")
-  if ("SAS" %in% values) return("SAS")
-  if ("Middle Eastern" %in% values) return("Middle Eastern")
-  if ("Native American" %in% values) return("Native American")
-  if (identical(values, "White")) return("White")
-  "Other/Unknown"
-}
-
-assign_sre_legacy <- function(values) {
-  values <- clean_sre_values(values)
-  if ("Hispanic" %in% values) return("Hispanic")
-  if ("Native American" %in% values) return("Native American")
-  if ("Black" %in% values) return("Black")
-  if ("EAS" %in% values) return("EAS")
-  if ("SAS" %in% values) return("SAS")
-  if ("Middle Eastern" %in% values) return("Middle Eastern")
-  if (identical(values, "White")) return("White")
-  "Other/Unknown"
-}
 
 sre_levels <- c(
   "Hispanic", "White", "Middle Eastern", "Black", "SAS", "EAS",
@@ -282,8 +218,16 @@ sre_levels <- c(
 )
 ancestry_levels <- c("AMR", "AFR", "EUR", "SAS", "EAS")
 
-assigned_sre <- apply(cohort_raw[, race_columns, drop = FALSE], 1, assign_sre_v8)
-legacy_sre <- apply(cohort_raw[, race_columns, drop = FALSE], 1, assign_sre_legacy)
+pre_priority <- c(
+  "Hispanic", "Black", "EAS", "SAS", "Middle Eastern",
+  "Native American", "White"
+)
+assigned_sre <- apply(
+  cohort_raw[, race_columns, drop = FALSE],
+  1,
+  assign_pre,
+  hierarchy = pre_priority
+)
 reported_selection_count <- apply(
   cohort_raw[, race_columns, drop = FALSE],
   1,
@@ -308,7 +252,6 @@ entropy_bits <- -rowSums(
 cohort <- bind_cols(
   data.frame(
     assigned_sre = assigned_sre,
-    legacy_sre = legacy_sre,
     reported_selection_count = reported_selection_count,
     reporting_status = reporting_status,
     majority_ga = majority_ga,
@@ -321,31 +264,12 @@ cohort <- bind_cols(
 )
 cohort$outcome <- ifelse(cohort$raw_group == "patients", "True positive", "False positive")
 cohort$assigned_sre <- factor(cohort$assigned_sre, levels = sre_levels)
-cohort$legacy_sre <- factor(cohort$legacy_sre, levels = sre_levels)
 cohort$reporting_status <- factor(
   cohort$reporting_status,
   levels = c("Single/no multiple report", "Multiple")
 )
 cohort$majority_ga <- factor(cohort$majority_ga, levels = ancestry_levels)
 stopifnot(nrow(cohort) == 378L, sum(cohort$reporting_status == "Multiple") == 52L)
-
-sre_hierarchy_sensitivity <- full_join(
-  as.data.frame(table(cohort$assigned_sre), stringsAsFactors = FALSE) %>%
-    rename(sre = Var1, v8_methods_hierarchy_n = Freq),
-  as.data.frame(table(cohort$legacy_sre), stringsAsFactors = FALSE) %>%
-    rename(sre = Var1, legacy_native_before_eas_n = Freq),
-  by = "sre"
-) %>%
-  mutate(
-    difference = v8_methods_hierarchy_n - legacy_native_before_eas_n,
-    sre = factor(sre, levels = sre_levels)
-  ) %>%
-  arrange(sre)
-write.csv(
-  sre_hierarchy_sensitivity,
-  file.path(table_dir, "sre_hierarchy_sensitivity.csv"),
-  row.names = FALSE
-)
 
 # Cohort-count table: aggregate only; no sample identifiers.
 make_count_section <- function(section, values, levels = NULL) {
@@ -371,14 +295,14 @@ cohort_counts <- bind_rows(
   ),
   make_count_section("Outcome", cohort$outcome),
   make_count_section("Raw cohort group", cohort$raw_group),
-  make_count_section("Assigned SRE (v8 hierarchy)", cohort$assigned_sre, sre_levels),
+  make_count_section("Assigned PRE", cohort$assigned_sre, sre_levels),
   make_count_section(
-    "SRE reporting status",
+    "PRE reporting status",
     cohort$reporting_status,
     c("Single/no multiple report", "Multiple")
   ),
   make_count_section(
-    "Number of nonmissing SRE selections",
+    "Number of nonmissing PRE selections",
     as.character(cohort$reported_selection_count),
     as.character(0:3)
   ),
@@ -408,9 +332,7 @@ write.csv(
   row.names = FALSE
 )
 
-# -----------------------------------------------------------------------------
-# Figure 2 source table and agreement analysis
-# -----------------------------------------------------------------------------
+# PRE-GIA agreement ----
 
 cross_source <- cohort %>%
   count(assigned_sre, majority_ga, .drop = FALSE, name = "n") %>%
@@ -430,15 +352,6 @@ write.csv(
   file.path(table_dir, "figure2_sre_majority_ga_source.csv"),
   row.names = FALSE
 )
-
-cohen_kappa <- function(a, b, levels) {
-  tab <- table(factor(a, levels = levels), factor(b, levels = levels))
-  total <- sum(tab)
-  observed <- sum(diag(tab)) / total
-  expected <- sum(rowSums(tab) * colSums(tab)) / total^2
-  kappa <- if (expected < 1) (observed - expected) / (1 - expected) else NA_real_
-  list(kappa = kappa, observed = observed, expected = expected, table = tab)
-}
 
 sre_to_ga <- c(Hispanic = "AMR", White = "EUR", Black = "AFR", SAS = "SAS", EAS = "EAS")
 kappa_keep <- as.character(cohort$assigned_sre) %in% names(sre_to_ga)
@@ -475,7 +388,7 @@ write.csv(
 )
 
 kappa_confusion <- as.data.frame.matrix(kappa_result$table)
-kappa_confusion <- cbind(SRE_mapped_component = rownames(kappa_confusion), kappa_confusion)
+kappa_confusion <- cbind(PRE_mapped_component = rownames(kappa_confusion), kappa_confusion)
 rownames(kappa_confusion) <- NULL
 write.csv(
   kappa_confusion,
@@ -483,9 +396,7 @@ write.csv(
   row.names = FALSE
 )
 
-# -----------------------------------------------------------------------------
-# Figure 3 source tables and entropy inference
-# -----------------------------------------------------------------------------
+# Ancestry entropy ----
 
 entropy_source <- cohort %>%
   transmute(
@@ -516,14 +427,6 @@ write.csv(
   file.path(table_dir, "figure3_entropy_summary.csv"),
   row.names = FALSE
 )
-
-cliffs_delta <- function(x, y) {
-  nx <- length(x)
-  ny <- length(y)
-  ranks <- rank(c(x, y), ties.method = "average")
-  u <- sum(ranks[seq_len(nx)]) - nx * (nx + 1) / 2
-  2 * u / (nx * ny) - 1
-}
 
 entropy_single <- cohort$entropy_bits[
   cohort$reporting_status == "Single/no multiple report"
@@ -603,9 +506,7 @@ write.csv(
   row.names = FALSE
 )
 
-# -----------------------------------------------------------------------------
-# Plot styling and palettes
-# -----------------------------------------------------------------------------
+# Plot styling ----
 
 ancestry_palette <- c(
   AMR = "#E69F00", # orange
@@ -642,31 +543,6 @@ theme_journal <- function(base_size = 10) {
     )
 }
 
-save_figure <- function(plot, stem, width, height) {
-  pdf_path <- file.path(figure_dir, paste0(stem, ".pdf"))
-  png_path <- file.path(figure_dir, paste0(stem, ".png"))
-  ggsave(
-    pdf_path,
-    plot = plot,
-    width = width,
-    height = height,
-    units = "in",
-    device = grDevices::cairo_pdf,
-    bg = "white"
-  )
-  ggsave(
-    png_path,
-    plot = plot,
-    width = width,
-    height = height,
-    units = "in",
-    dpi = 300,
-    device = ragg::agg_png,
-    bg = "white"
-  )
-  c(pdf = pdf_path, png = png_path)
-}
-
 group_boundaries <- function(data, group_column) {
   data %>%
     group_by(.data[[group_column]]) %>%
@@ -678,9 +554,7 @@ group_boundaries <- function(data, group_column) {
     )
 }
 
-# -----------------------------------------------------------------------------
-# Figure 1: 1000G reference and 378-cohort ADMIXTURE panels
-# -----------------------------------------------------------------------------
+# Reference and study ancestry profiles ----
 
 population_order <- c(
   "PEL", "MXL", "CLM", "PUR",
@@ -835,8 +709,8 @@ figure1b <- ggplot(cohort_long, aes(plot_index, proportion, fill = ancestry)) +
   coord_cartesian(ylim = c(0, 1), expand = FALSE) +
   labs(
     title = "B  Screen-positive newborn cohort (n = 378)",
-    subtitle = "Supervised K=5 estimates grouped by the manuscript-v8 SRE hierarchy",
-    x = "Assigned self-reported ethnicity (SRE)",
+    subtitle = "Supervised K=5 estimates grouped by assigned PRE",
+    x = "Assigned PRE",
     y = "Ancestry proportion",
     fill = "Ancestry component"
   ) +
@@ -849,16 +723,15 @@ figure1b <- ggplot(cohort_long, aes(plot_index, proportion, fill = ancestry)) +
 figure1 <- (figure1a / figure1b) +
   plot_layout(heights = c(1.05, 1), guides = "collect") &
   theme(legend.position = "bottom")
-figure1_paths <- save_figure(
+figure1_paths <- save_figure_pair(
   figure1,
-  "Figure1_ADMIXTURE_reference_and_cohort_v8",
+  figure_dir,
+  "reference_and_study_ancestry",
   width = 12,
   height = 7.4
 )
 
-# -----------------------------------------------------------------------------
-# Figure 2: SRE x majority-GA counts and conditional proportions
-# -----------------------------------------------------------------------------
+# PRE by largest GIA component ----
 
 figure2_heat <- cross_source %>%
   mutate(
@@ -879,7 +752,7 @@ figure2a <- ggplot(
     title = "A  Exact cross-classification",
     subtitle = "Cell labels show count and row percentage",
     x = "Majority genetic ancestry",
-    y = "Assigned SRE"
+    y = "Assigned PRE"
   ) +
   coord_fixed(ratio = 0.65) +
   theme_journal(9) +
@@ -897,9 +770,9 @@ figure2b <- ggplot(
     expand = expansion(mult = c(0, 0))
   ) +
   labs(
-    title = "B  Majority GA within SRE",
-    x = "Assigned SRE",
-    y = "Within-SRE proportion",
+    title = "B  Largest GIA component within PRE",
+    x = "Assigned PRE",
+    y = "Within-PRE proportion",
     fill = "Majority GA"
   ) +
   theme_journal(9) +
@@ -917,31 +790,25 @@ figure2c <- ggplot(
     expand = expansion(mult = c(0, 0))
   ) +
   labs(
-    title = "C  SRE within majority GA",
+    title = "C  PRE within largest GIA component",
     x = "Majority genetic ancestry",
     y = "Within-GA proportion",
-    fill = "Assigned SRE"
+    fill = "Assigned PRE"
   ) +
   theme_journal(9) +
   theme(legend.position = "bottom")
 
 figure2 <- figure2a / (figure2b | figure2c) +
   plot_layout(heights = c(1.15, 1))
-figure2_paths <- save_figure(
+figure2_paths <- save_figure_pair(
   figure2,
-  "Figure2_SRE_majority_GA_concordance_v8",
+  figure_dir,
+  "pre_largest_gia_concordance",
   width = 12,
   height = 9.2
 )
 
-# -----------------------------------------------------------------------------
-# Figure 3: entropy by SRE and reporting status
-# -----------------------------------------------------------------------------
-
-format_p <- function(p) {
-  if (is.na(p)) return("NA")
-  if (p < 0.001) format(p, scientific = TRUE, digits = 2) else sprintf("%.3f", p)
-}
+# Entropy by PRE reporting status ----
 
 figure3a <- ggplot(
   cohort,
@@ -968,12 +835,12 @@ figure3a <- ggplot(
   ) +
   coord_cartesian(ylim = c(0, log2(5))) +
   labs(
-    title = "A  Admixture entropy by assigned SRE",
+    title = "A  Ancestry entropy by assigned PRE",
     subtitle = "Entropy is calculated in bits across the five ADMIXTURE proportions",
-    x = "Assigned SRE",
+    x = "Assigned PRE",
     y = "Shannon entropy (bits)",
-    color = "SRE reporting status",
-    fill = "SRE reporting status"
+    color = "PRE reporting status",
+    fill = "PRE reporting status"
   ) +
   theme_journal(9) +
   theme(
@@ -989,7 +856,7 @@ entropy_annotation <- sprintf(
   entropy_cliffs_delta,
   entropy_delta_ci[1],
   entropy_delta_ci[2],
-  format_p(entropy_wilcox$p.value)
+  format_p_value(entropy_wilcox$p.value)
 )
 
 figure3b <- ggplot(
@@ -1027,33 +894,21 @@ figure3b <- ggplot(
   theme(legend.position = "none")
 
 figure3 <- figure3a | figure3b
-figure3_paths <- save_figure(
+figure3_paths <- save_figure_pair(
   figure3,
-  "Figure3_entropy_by_SRE_and_reporting_status_v8",
+  figure_dir,
+  "entropy_by_pre_and_reporting_status",
   width = 12,
   height = 5.9
 )
 
-# -----------------------------------------------------------------------------
-# Figure 4: multi-SRE ADMIXTURE profiles plus reported-selection matrix
-# -----------------------------------------------------------------------------
-
-harmonize_reported_category <- function(value) {
-  if (is.na(value) || !nzchar(trimws(as.character(value)))) return(NA_character_)
-  value <- trimws(as.character(value))
-  if (value %in% eas_labels) return("EAS")
-  if (value %in% sas_labels) return("SAS")
-  if (value %in% c("Hispanic", "White", "Black", "Middle Eastern", "Native American")) {
-    return(value)
-  }
-  "Other/Unknown"
-}
+# Multiple-PRE ancestry profiles ----
 
 multi_indices <- which(cohort$reporting_status == "Multiple")
 multi_plot <- cohort[multi_indices, , drop = FALSE]
 multi_raw_race <- cohort_raw[multi_indices, race_columns, drop = FALSE]
 multi_combinations <- apply(multi_raw_race, 1, function(values) {
-  categories <- unique(na.omit(vapply(values, harmonize_reported_category, character(1))))
+  categories <- unique(na.omit(vapply(values, harmonize_pre_value, character(1))))
   paste(categories, collapse = " + ")
 })
 multi_plot$reported_sre_combination <- multi_combinations
@@ -1093,7 +948,7 @@ write.csv(
 )
 
 multi_raw_categories <- lapply(seq_len(nrow(multi_raw_race)), function(i) {
-  unique(na.omit(vapply(multi_raw_race[i, ], harmonize_reported_category, character(1))))
+  unique(na.omit(vapply(multi_raw_race[i, ], harmonize_pre_value, character(1))))
 })
 original_multi_order <- multi_indices
 plot_order_to_original <- original_multi_order[match(
@@ -1186,8 +1041,8 @@ figure4a <- ggplot(multi_long, aes(plot_index, proportion, fill = ancestry)) +
   ) +
   coord_cartesian(ylim = c(0, 1), expand = FALSE) +
   labs(
-    title = "A  Genetic ancestry profiles among participants with multiple SRE selections (n = 52)",
-    x = "Assigned SRE (v8 hierarchy)",
+    title = "A  Genetic ancestry profiles among participants with multiple PRE selections (n = 52)",
+    x = "Assigned PRE",
     y = "Ancestry proportion",
     fill = "Ancestry component"
   ) +
@@ -1215,7 +1070,7 @@ figure4b <- ggplot(
     breaks = NULL
   ) +
   labs(
-    title = "B  Harmonized reported SRE selections in the same anonymous order",
+    title = "B  Harmonized reported PRE selections in the same anonymous order",
     x = NULL,
     y = "Reported selection"
   ) +
@@ -1227,16 +1082,15 @@ figure4b <- ggplot(
   )
 
 figure4 <- figure4a / figure4b + plot_layout(heights = c(2.8, 1.55))
-figure4_paths <- save_figure(
+figure4_paths <- save_figure_pair(
   figure4,
-  "Figure4_multiple_SRE_ancestry_profiles_v8",
+  figure_dir,
+  "multiple_pre_ancestry_profiles",
   width = 12,
   height = 7.8
 )
 
-# -----------------------------------------------------------------------------
-# Figure/source manifest, session record, and concise analysis report
-# -----------------------------------------------------------------------------
+# Run records ----
 
 figure_manifest <- data.frame(
   figure = paste0("Figure ", 1:4),
@@ -1277,10 +1131,10 @@ count_value <- function(section, category) {
 }
 
 report_lines <- c(
-  "# Descriptive analysis report: manuscript v8 Figures 1-4",
+  "# PRE-GIA descriptive analysis",
   "",
   sprintf("Run date: %s", format(Sys.Date(), "%Y-%m-%d")),
-  sprintf("Reproducibility seed: %d; bootstrap replicates: %s", seed, comma(bootstrap_replicates)),
+  sprintf("Seed: %d; bootstrap replicates: %s", seed, comma(bootstrap_replicates)),
   "",
   "## Methods",
   "",
@@ -1295,13 +1149,13 @@ report_lines <- c(
     "against known 1000 Genomes superpopulations separately for each Q matrix."
   ),
   paste0(
-    "The v8 SRE hierarchy was frozen to the hierarchy written in the manuscript Methods: ",
+    "PRE was assigned using the hierarchy defined in the Methods: ",
     "Hispanic > Black > EAS > SAS > Middle Eastern > Native American > White; all remaining ",
     "records were assigned Other/Unknown."
   ),
   paste0(
     "Majority GA was the largest of AMR, AFR, EUR, SAS, and EAS. Shannon entropy was calculated ",
-    "as -sum(p*log2(p)) and is reported in bits. `Multiple` required at least two nonmissing SRE ",
+    "as -sum(p*log2(p)) and is reported in bits. `Multiple` required at least two nonmissing PRE ",
     "selections; all others were labeled `Single/no multiple report`."
   ),
   paste0(
@@ -1320,19 +1174,19 @@ report_lines <- c(
     count_value("Outcome", "False positive")
   ),
   sprintf(
-    "- SRE reporting: %d participants had multiple selections; %d had no multiple report. ",
-    count_value("SRE reporting status", "Multiple"),
-    count_value("SRE reporting status", "Single/no multiple report")
+    "- PRE reporting: %d participants had multiple selections; %d had no multiple report. ",
+    count_value("PRE reporting status", "Multiple"),
+    count_value("PRE reporting status", "Single/no multiple report")
   ),
   paste0(
-    "- Assigned SRE counts under the v8 hierarchy: ",
+    "- Assigned PRE counts: ",
     paste(
       sprintf(
         "%s=%d",
         sre_levels,
         vapply(
           sre_levels,
-          function(x) count_value("Assigned SRE (v8 hierarchy)", x),
+          function(x) count_value("Assigned PRE", x),
           numeric(1)
         )
       ),
@@ -1378,28 +1232,18 @@ report_lines <- c(
     mean(entropy_multiple), sd(entropy_multiple), length(entropy_multiple),
     entropy_mean_difference, entropy_mean_ci[1], entropy_mean_ci[2],
     entropy_cliffs_delta, entropy_delta_ci[1], entropy_delta_ci[2],
-    format_p(entropy_wilcox$p.value)
+    format_p_value(entropy_wilcox$p.value)
   ),
   "",
   "## Important caveats",
   "",
   paste0(
-    "- The v8 Methods hierarchy changes one multi-SRE participant from Native American under the ",
-    "legacy code to EAS because EAS precedes Native American. Consequently, v8 counts are EAS=34 ",
-    "and Native American=1, rather than the legacy EAS=33 and Native American=2."
-  ),
-  paste0(
-    "- The majority-GA totals generated from the local Q matrix are AMR=167, AFR=24, EUR=127, ",
-    "SAS=13, and EAS=47. They do not match the majority-GA totals currently stated in manuscript v7, ",
-    "which appear to reuse SRE totals. Figure 2 and its exact source table should replace typed prose."
-  ),
-  paste0(
-    "- Three records had no nonmissing first SRE selection. They are assigned Other/Unknown and are ",
+    "- Three records had no nonmissing first PRE selection. They are assigned Other/Unknown and are ",
     "included in `Single/no multiple report` because no second selection was present."
   ),
   paste0(
     "- AMR is an ADMIXTURE component label and should not be treated as equivalent to a social or ",
-    "tribal identity. SRE and genetic ancestry remain distinct constructs."
+    "tribal identity. PRE and genetic ancestry remain distinct constructs."
   ),
   paste0(
     "- Upstream ADMIXTURE command lines, seeds, SNP-list provenance, and supervised population files ",
@@ -1431,6 +1275,6 @@ for (table_path in output_tables) {
   }
 }
 
-message("Descriptive release complete.")
+message("Descriptive analysis complete.")
 message("Analysis report: ", file.path(analysis_dir, "analysis_report.md"))
 message("Figures: ", figure_dir)

@@ -2,19 +2,18 @@
 
 options(stringsAsFactors = FALSE)
 
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+helper_dir <- file.path(dirname(script_path), "..", "R")
+source(file.path(helper_dir, "project_setup.R"))
+source(file.path(helper_dir, "plot_helpers.R"))
+
 required_packages <- c(
   "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr", "digest"
 )
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-if (length(missing_packages) > 0L) {
-  stop(
-    "Missing required R packages: ",
-    paste(missing_packages, collapse = ", "),
-    ". Install them in the project environment before running this script."
-  )
-}
+require_packages(required_packages)
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -24,22 +23,14 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
-
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
-run_rel <- file.path("results", "figure2")
 run_dir <- file.path(paths$results, "figure2")
 figure_dir <- file.path(run_dir, "figures")
 table_dir <- file.path(run_dir, "tables")
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(figure_dir, table_dir)
+
+# Source tables ----
 
 source_table_dir <- file.path(paths$results, "descriptive", "tables")
 input_files <- c(
@@ -53,10 +44,7 @@ input_files <- c(
 )
 input_paths <- file.path(source_table_dir, unname(input_files))
 names(input_paths) <- names(input_files)
-missing_inputs <- input_paths[!file.exists(input_paths)]
-if (length(missing_inputs) > 0L) {
-  stop("Missing required input files: ", paste(missing_inputs, collapse = ", "))
-}
+require_files(input_paths)
 
 read_source_csv <- function(path) {
   read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
@@ -126,6 +114,8 @@ status_levels_source <- c("Single/no multiple report", "Multiple")
 status_levels_display <- c("Single/no multiple PRE", "Multiple PREs")
 status_label_map <- setNames(status_levels_display, status_levels_source)
 
+# Prepare entropy and profile data ----
+
 entropy_plot_data <- entropy_individual %>%
   transmute(
     anonymous_plot_index,
@@ -172,7 +162,7 @@ profile_entropy <- -rowSums(
   )
 )
 
-profile_v2 <- profile_source %>%
+profile <- profile_source %>%
   mutate(entropy_bits = profile_entropy) %>%
   left_join(canonical_combinations, by = "anonymous_plot_index") %>%
   mutate(
@@ -184,28 +174,28 @@ profile_v2 <- profile_source %>%
     desc(entropy_bits),
     anonymous_plot_index
   ) %>%
-  mutate(profile_index_v2 = row_number())
+  mutate(profile_index = row_number())
 
-if (any(is.na(profile_v2$reported_pre_combination))) {
+if (any(is.na(profile$reported_pre_combination))) {
   stop("At least one multiple-PRE profile has no reconstructed PRE combination.")
 }
 
-profile_index_map <- profile_v2 %>%
-  select(anonymous_plot_index, profile_index_v2)
+profile_index_map <- profile %>%
+  select(anonymous_plot_index, profile_index)
 
-tile_v2 <- tile_source %>%
+profile_tiles <- tile_source %>%
   left_join(profile_index_map, by = "anonymous_plot_index") %>%
   transmute(
-    profile_index_v2,
+    profile_index,
     reported_pre = factor(reported_category, levels = rev(selection_pre_levels)),
     present
   )
-if (any(is.na(tile_v2$profile_index_v2))) {
-  stop("Selection tiles did not map completely to Version 3 profile indices.")
+if (any(is.na(profile_tiles$profile_index))) {
+  stop("Selection tiles did not map completely to the profile indices.")
 }
 
-profile_long <- profile_v2 %>%
-  select(profile_index_v2, assigned_pre, all_of(ancestry_levels)) %>%
+profile_long <- profile %>%
+  select(profile_index, assigned_pre, all_of(ancestry_levels)) %>%
   pivot_longer(
     cols = all_of(ancestry_levels),
     names_to = "gia_component",
@@ -213,11 +203,11 @@ profile_long <- profile_v2 %>%
   ) %>%
   mutate(gia_component = factor(gia_component, levels = ancestry_levels))
 
-group_boundaries <- profile_v2 %>%
+group_boundaries <- profile %>%
   group_by(assigned_pre, .drop = TRUE) %>%
   summarise(
-    start = min(profile_index_v2),
-    end = max(profile_index_v2),
+    start = min(profile_index),
+    end = max(profile_index),
     center = (start + end) / 2,
     n = n(),
     .groups = "drop"
@@ -225,7 +215,7 @@ group_boundaries <- profile_v2 %>%
   arrange(assigned_pre) %>%
   mutate(axis_label = sprintf("%s (n = %d)", assigned_pre, n))
 
-entropy_summary_v2 <- entropy_summary %>%
+entropy_summary_plot <- entropy_summary %>%
   transmute(
     assigned_pre = assigned_sre,
     pre_reporting_status = unname(status_label_map[reporting_status]),
@@ -236,7 +226,7 @@ entropy_summary_v2 <- entropy_summary %>%
     iqr_entropy_bits
   )
 
-entropy_within_pre_v2 <- entropy_within_pre %>%
+entropy_tests <- entropy_within_pre %>%
   transmute(
     assigned_pre = assigned_sre,
     multiple_pre_n = multiple_n,
@@ -246,7 +236,7 @@ entropy_within_pre_v2 <- entropy_within_pre %>%
     wilcoxon_bh_adjusted_p
   )
 
-entropy_overall_v2 <- entropy_overall %>%
+entropy_overall_summary <- entropy_overall %>%
   transmute(
     single_or_no_multiple_pre_n = single_n,
     single_or_no_multiple_pre_mean_bits = single_mean_bits,
@@ -266,16 +256,16 @@ entropy_overall_v2 <- entropy_overall %>%
     seed
   )
 
-largest_gia_counts <- profile_v2 %>%
+largest_gia_counts <- profile %>%
   count(largest_gia_component = majority_ga, name = "n") %>%
   mutate(percent = 100 * n / sum(n)) %>%
   arrange(match(largest_gia_component, ancestry_levels))
 
-assigned_pre_counts <- profile_v2 %>%
+assigned_pre_counts <- profile %>%
   count(assigned_pre, name = "n", .drop = TRUE) %>%
   mutate(percent = 100 * n / sum(n))
 
-combination_counts <- profile_v2 %>%
+combination_counts <- profile %>%
   count(reported_pre_combination, name = "n") %>%
   mutate(percent = 100 * n / sum(n)) %>%
   arrange(desc(n), reported_pre_combination)
@@ -291,31 +281,31 @@ descriptive_patterns <- data.frame(
     "Among Hispanic-assigned participants with EUR >50%, reporting White"
   ),
   numerator = c(
-    sum(profile_v2$assigned_sre == "EAS" & profile_v2$EUR > 0.10),
-    sum(profile_v2$assigned_sre == "Hispanic" & profile_v2$AFR > 0.10),
+    sum(profile$assigned_sre == "EAS" & profile$EUR > 0.10),
+    sum(profile$assigned_sre == "Hispanic" & profile$AFR > 0.10),
     sum(
-      profile_v2$assigned_sre == "Hispanic" & profile_v2$AFR > 0.10 &
-        grepl("Black", profile_v2$reported_pre_combination, fixed = TRUE)
+      profile$assigned_sre == "Hispanic" & profile$AFR > 0.10 &
+        grepl("Black", profile$reported_pre_combination, fixed = TRUE)
     ),
-    sum(profile_v2$assigned_sre == "Hispanic" & profile_v2$EAS > 0.10),
+    sum(profile$assigned_sre == "Hispanic" & profile$EAS > 0.10),
     sum(
-      profile_v2$assigned_sre == "Hispanic" & profile_v2$EAS > 0.10 &
-        grepl("EAS|SAS", profile_v2$reported_pre_combination)
+      profile$assigned_sre == "Hispanic" & profile$EAS > 0.10 &
+        grepl("EAS|SAS", profile$reported_pre_combination)
     ),
-    sum(profile_v2$assigned_sre == "Hispanic" & profile_v2$EUR > 0.50),
+    sum(profile$assigned_sre == "Hispanic" & profile$EUR > 0.50),
     sum(
-      profile_v2$assigned_sre == "Hispanic" & profile_v2$EUR > 0.50 &
-        grepl("White", profile_v2$reported_pre_combination, fixed = TRUE)
+      profile$assigned_sre == "Hispanic" & profile$EUR > 0.50 &
+        grepl("White", profile$reported_pre_combination, fixed = TRUE)
     )
   ),
   denominator = c(
-    sum(profile_v2$assigned_sre == "EAS"),
-    sum(profile_v2$assigned_sre == "Hispanic"),
-    sum(profile_v2$assigned_sre == "Hispanic" & profile_v2$AFR > 0.10),
-    sum(profile_v2$assigned_sre == "Hispanic"),
-    sum(profile_v2$assigned_sre == "Hispanic" & profile_v2$EAS > 0.10),
-    sum(profile_v2$assigned_sre == "Hispanic"),
-    sum(profile_v2$assigned_sre == "Hispanic" & profile_v2$EUR > 0.50)
+    sum(profile$assigned_sre == "EAS"),
+    sum(profile$assigned_sre == "Hispanic"),
+    sum(profile$assigned_sre == "Hispanic" & profile$AFR > 0.10),
+    sum(profile$assigned_sre == "Hispanic"),
+    sum(profile$assigned_sre == "Hispanic" & profile$EAS > 0.10),
+    sum(profile$assigned_sre == "Hispanic"),
+    sum(profile$assigned_sre == "Hispanic" & profile$EUR > 0.50)
   )
 ) %>%
   mutate(percent = 100 * numerator / denominator)
@@ -326,24 +316,24 @@ write.csv(
   row.names = FALSE
 )
 write.csv(
-  entropy_summary_v2,
+  entropy_summary_plot,
   file.path(table_dir, "entropy_by_pre_summary.csv"),
   row.names = FALSE
 )
 write.csv(
-  entropy_overall_v2,
+  entropy_overall_summary,
   file.path(table_dir, "entropy_overall_comparison.csv"),
   row.names = FALSE
 )
 write.csv(
-  entropy_within_pre_v2,
+  entropy_tests,
   file.path(table_dir, "entropy_within_assigned_pre_tests.csv"),
   row.names = FALSE
 )
 write.csv(
-  profile_v2 %>%
+  profile %>%
     transmute(
-      anonymous_profile_index_v2 = profile_index_v2,
+      anonymous_profile_index = profile_index,
       assigned_pre,
       reported_pre_combination,
       largest_gia_component = majority_ga,
@@ -355,9 +345,9 @@ write.csv(
   row.names = FALSE
 )
 write.csv(
-  tile_v2 %>%
+  profile_tiles %>%
     transmute(
-      anonymous_profile_index_v2 = profile_index_v2,
+      anonymous_profile_index = profile_index,
       reported_pre,
       present
     ),
@@ -410,6 +400,8 @@ status_palette <- c(
   `Multiple PREs` = "#D55E00"
 )
 
+# Figure panels ----
+
 theme_publication <- function(base_size = 9.5) {
   theme_classic(base_size = base_size, base_family = "sans") +
     theme(
@@ -422,7 +414,7 @@ theme_publication <- function(base_size = 9.5) {
     )
 }
 
-overall_row <- entropy_overall_v2[1, ]
+overall_row <- entropy_overall_summary[1, ]
 overall_x_labels <- c(
   `Single/no multiple PRE` = sprintf(
     "Single/no multiple PRE\n(n = %d)",
@@ -562,7 +554,7 @@ separator_data <- group_boundaries %>%
 
 panel_c <- ggplot(
   profile_long,
-  aes(x = profile_index_v2, y = proportion, fill = gia_component)
+  aes(x = profile_index, y = proportion, fill = gia_component)
 ) +
   geom_col(width = 1, linewidth = 0) +
   geom_vline(
@@ -601,9 +593,9 @@ panel_c <- ggplot(
   )
 
 panel_d <- ggplot(
-  tile_v2,
+  profile_tiles,
   aes(
-    x = profile_index_v2,
+    x = profile_index,
     y = reported_pre,
     fill = ifelse(present, as.character(reported_pre), "Not selected")
   )
@@ -620,14 +612,14 @@ panel_d <- ggplot(
     guide = "none"
   ) +
   scale_x_continuous(
-    limits = c(0.5, nrow(profile_v2) + 0.5),
+    limits = c(0.5, nrow(profile) + 0.5),
     breaks = group_boundaries$center,
     labels = group_boundaries$axis_label,
     expand = expansion(mult = c(0, 0))
   ) +
   labs(
     title = NULL,
-    x = "Assigned PRE (frozen hierarchical category)",
+    x = "Assigned PRE",
     y = "Reported PRE selection"
   ) +
   theme_publication(9.5) +
@@ -650,60 +642,34 @@ combined_figure <- (entropy_figure / profile_figure) +
   plot_layout(heights = c(1.0, 1.55), guides = "collect") &
   theme(legend.position = "right")
 
-save_figure <- function(plot, stem, width, height) {
-  pdf_path <- file.path(figure_dir, paste0(stem, ".pdf"))
-  png_path <- file.path(figure_dir, paste0(stem, ".png"))
-  ggsave(
-    pdf_path,
-    plot = plot,
-    width = width,
-    height = height,
-    units = "in",
-    device = grDevices::cairo_pdf,
-    bg = "white"
-  )
-  ggsave(
-    png_path,
-    plot = plot,
-    width = width,
-    height = height,
-    units = "in",
-    dpi = 300,
-    device = ragg::agg_png,
-    bg = "white"
-  )
-  c(pdf = pdf_path, png = png_path)
-}
-
-entropy_paths <- save_figure(
+entropy_paths <- save_figure_pair(
   entropy_figure,
-  "Figure_entropy_by_PRE_reporting_status_v3",
+  figure_dir,
+  "figure2_entropy",
   width = 12.5,
   height = 5.0
 )
-profile_paths <- save_figure(
+profile_paths <- save_figure_pair(
   profile_figure,
-  "Figure_multiple_PRE_GIA_profiles_v3",
+  figure_dir,
+  "figure2_multiple_pre_profiles",
   width = 13.5,
   height = 7.2
 )
-combined_paths <- save_figure(
+combined_paths <- save_figure_pair(
   combined_figure,
-  "Figure_entropy_and_multiple_PRE_GIA_v3",
+  figure_dir,
+  "figure2",
   width = 13.5,
   height = 11.2
 )
 
+# Output records ----
+
 input_checksums <- data.frame(
   input_role = names(input_paths),
   source_path = file.path("results", "descriptive", "tables", basename(input_paths)),
-  sha256 = vapply(
-    input_paths,
-    digest::digest,
-    character(1),
-    algo = "sha256",
-    file = TRUE
-  )
+  sha256 = sha256_files(input_paths)
 )
 write.csv(
   input_checksums,
@@ -720,17 +686,11 @@ output_paths <- c(
 output_manifest <- data.frame(
   file = vapply(
     output_paths,
-    function(path) relative_to_release(path, project_root),
+    function(path) relative_to_project(path, project_root),
     character(1)
   ),
   bytes = unname(file.info(output_paths)$size),
-  sha256 = vapply(
-    output_paths,
-    digest::digest,
-    character(1),
-    algo = "sha256",
-    file = TRUE
-  )
+  sha256 = sha256_files(output_paths)
 )
 write.csv(
   output_manifest,
@@ -743,12 +703,12 @@ capture.output(sessionInfo(), file = file.path(run_dir, "sessionInfo.txt"))
 caption_text <- c(
   "**Figure X. Global genetically inferred ancestry complexity and profiles among participants with multiple parent-reported ethnicity (PRE) selections.**",
   "",
-  "(A) Shannon entropy of the five global GIA proportions among participants with zero or one nonmissing PRE selection (Single/no multiple PRE) and those with at least two nonmissing PRE selections (Multiple PREs). Higher entropy indicates a more even distribution across GIA components; the theoretical maximum for five equally represented components is log2(5) = 2.322 bits. (B) Entropy distributions within assigned PRE categories represented among participants with multiple PRE selections; x-axis counts are shown as Single/no multiple PRE followed by Multiple PREs. Boxplots show the median and interquartile range, whiskers extend to 1.5 times the interquartile range, points represent participants, and white diamonds indicate means. (C) Individual global GIA profiles for the 52 participants with multiple PRE selections, with the harmonized PRE-selection matrix aligned beneath the ancestry profiles in the same anonymous order. Participants are ordered by assigned PRE, canonicalized reported-PRE combination, and entropy. Assigned PRE was derived using the frozen hierarchy, whereas all original nonmissing selections were retained for the multiple-PRE analysis. Multiple-PRE status was defined before harmonization; therefore, two or more source selections that map to one displayed category may appear as a single tile. Panel C is descriptive and contains no sample identifiers."
+  "(A) Shannon entropy of the five global GIA proportions among participants with zero or one nonmissing PRE selection (Single/no multiple PRE) and those with at least two nonmissing PRE selections (Multiple PREs). Higher entropy indicates a more even distribution across GIA components; the theoretical maximum for five equally represented components is log2(5) = 2.322 bits. (B) Entropy distributions within assigned PRE categories represented among participants with multiple PRE selections; x-axis counts are shown as Single/no multiple PRE followed by Multiple PREs. Boxplots show the median and interquartile range, whiskers extend to 1.5 times the interquartile range, points represent participants, and white diamonds indicate means. (C) Individual global GIA profiles for the 52 participants with multiple PRE selections, with the harmonized PRE-selection matrix aligned beneath the ancestry profiles in the same anonymous order. Participants are ordered by assigned PRE, canonicalized reported-PRE combination, and entropy. PRE was assigned with the hierarchy described in the Methods, while all original nonmissing selections were retained for this analysis. Multiple-PRE status was defined before harmonization; therefore, two or more source selections that map to one displayed category may appear as a single tile. Panel C is descriptive and contains no sample identifiers."
 )
 writeLines(caption_text, file.path(run_dir, "figure_caption.md"))
 
 get_summary_row <- function(pre_name, status_name) {
-  entropy_summary_v2 %>%
+  entropy_summary_plot %>%
     filter(
       assigned_pre == pre_name,
       pre_reporting_status == status_name
@@ -765,7 +725,7 @@ other_single <- get_summary_row("Other/Unknown", "Single/no multiple PRE")
 other_multiple <- get_summary_row("Other/Unknown", "Multiple PREs")
 
 test_row <- function(pre_name) {
-  entropy_within_pre_v2 %>% filter(assigned_pre == pre_name) %>% slice(1)
+  entropy_tests %>% filter(assigned_pre == pre_name) %>% slice(1)
 }
 hispanic_test <- test_row("Hispanic")
 eas_test <- test_row("EAS")
@@ -833,10 +793,10 @@ results_text <- c(
       "The most common canonical PRE combinations were %s. ",
       "Among the nine EAS-assigned participants, seven had more than 10%% EUR ancestry. Among Hispanic-assigned participants, seven of the eight with more than 10%% AFR ancestry also reported Black, and all 12 with more than 50%% EUR ancestry also reported White. These individual-level patterns are descriptive and illustrate that multiple PRE reporting corresponds to heterogeneous, rather than uniform, GIA profiles."
     ),
-    largest_lookup[["EUR"]], 100 * largest_lookup[["EUR"]] / nrow(profile_v2),
-    largest_lookup[["EAS"]], 100 * largest_lookup[["EAS"]] / nrow(profile_v2),
-    largest_lookup[["AMR"]], 100 * largest_lookup[["AMR"]] / nrow(profile_v2),
-    largest_lookup[["AFR"]], 100 * largest_lookup[["AFR"]] / nrow(profile_v2),
+    largest_lookup[["EUR"]], 100 * largest_lookup[["EUR"]] / nrow(profile),
+    largest_lookup[["EAS"]], 100 * largest_lookup[["EAS"]] / nrow(profile),
+    largest_lookup[["AMR"]], 100 * largest_lookup[["AMR"]] / nrow(profile),
+    largest_lookup[["AFR"]], 100 * largest_lookup[["AFR"]] / nrow(profile),
     paste(
       sprintf(
         "%s (n = %d, %.1f%%)",
@@ -851,7 +811,7 @@ results_text <- c(
 writeLines(results_text, file.path(run_dir, "results_draft.md"))
 
 run_manifest <- c(
-  "# Version 3 entropy and multiple-PRE GIA figure run",
+  "# Figure 2 entropy and multiple-PRE GIA run",
   "",
   paste0("- Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")),
   paste0(
@@ -872,4 +832,4 @@ run_manifest <- c(
 )
 writeLines(run_manifest, file.path(run_dir, "run_manifest.md"))
 
-message("Created Version 3 entropy and multiple-PRE GIA figures in: ", figure_dir)
+message("Created Figure 2 files in: ", figure_dir)

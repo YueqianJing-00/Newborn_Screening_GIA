@@ -1,7 +1,20 @@
 #!/usr/bin/env Rscript
 
-# Figure 1: parent-reported ethnicity (PRE) and genetically inferred ancestry
-# (GIA) concordance, regenerated from the descriptive-analysis source tables.
+# Figure 1: concordance between parent-reported ethnicity (PRE) and genetically
+# inferred ancestry (GIA).
+
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+helper_dir <- file.path(dirname(script_path), "..", "R")
+source(file.path(helper_dir, "project_setup.R"))
+source(file.path(helper_dir, "statistical_helpers.R"))
+
+required_packages <- c(
+  "digest", "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr"
+)
+require_packages(required_packages)
 
 suppressPackageStartupMessages({
   library(digest)
@@ -12,41 +25,20 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-required_packages <- c(
-  "digest", "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr"
-)
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-if (length(missing_packages) > 0) {
-  stop("Missing required R packages: ", paste(missing_packages, collapse = ", "))
-}
-
 profiles_only <- "--profiles-only" %in% commandArgs(trailingOnly = TRUE)
 
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
-
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
 analysis_dir <- file.path(paths$results, "figure1")
 source_dir <- file.path(paths$results, "descriptive", "tables")
 figure_dir <- file.path(analysis_dir, "figures")
 table_dir <- file.path(analysis_dir, "tables")
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(figure_dir, table_dir)
+
+# Source tables ----
 
 rel_path <- function(path) {
-  sub(
-    paste0("^", project_root, "/?"),
-    "",
-    normalizePath(path, mustWork = FALSE)
-  )
+  relative_to_project(path, project_root)
 }
 
 cross_file <- file.path(source_dir, "figure2_sre_majority_ga_source.csv")
@@ -55,12 +47,7 @@ cohort_file <- file.path(
   "figure1_cohort_admixture_source_restricted_internal.csv"
 )
 required_inputs <- c(cross_file, cohort_file)
-if (any(!file.exists(required_inputs))) {
-  stop(
-    "Missing required source files: ",
-    paste(rel_path(required_inputs[!file.exists(required_inputs)]), collapse = ", ")
-  )
-}
+require_files(required_inputs, "source file")
 
 source_manifest <- data.frame(
   role = c(
@@ -69,13 +56,7 @@ source_manifest <- data.frame(
   ),
   relative_path = vapply(required_inputs, rel_path, character(1)),
   bytes = as.numeric(file.info(required_inputs)$size),
-  sha256 = vapply(
-    required_inputs,
-    digest::digest,
-    character(1),
-    file = TRUE,
-    algo = "sha256"
-  ),
+  sha256 = sha256_files(required_inputs),
   stringsAsFactors = FALSE
 )
 write.csv(
@@ -114,6 +95,8 @@ ancestry_palette <- c(
   SAS = "#009E73",
   EAS = "#CC79A7"
 )
+
+# Cross-classification and profile panels ----
 
 cohort <- cohort %>%
   rename(
@@ -353,16 +336,7 @@ panel_e <- ggplot(cohort_long, aes(plot_index, proportion, fill = GIA_component)
     legend.direction = "vertical"
   )
 
-# Panel F: show how the high-confidence restriction changes the estimand.
-cohen_kappa <- function(a, b, levels) {
-  tab <- table(factor(a, levels = levels), factor(b, levels = levels))
-  total <- sum(tab)
-  observed <- sum(diag(tab)) / total
-  expected <- sum(rowSums(tab) * colSums(tab)) / total^2
-  kappa <- if (expected < 1) (observed - expected) / (1 - expected) else NA_real_
-  c(observed_agreement = observed, kappa = kappa)
-}
-
+# Agreement across ancestry-concentration thresholds.
 thresholds <- seq(0, 0.90, 0.05)
 threshold_sensitivity <- bind_rows(lapply(thresholds, function(threshold) {
   subset <- cohort %>%
@@ -379,8 +353,8 @@ threshold_sensitivity <- bind_rows(lapply(thresholds, function(threshold) {
   data.frame(
     threshold = threshold,
     n_retained = nrow(subset),
-    observed_agreement = unname(metrics[["observed_agreement"]]),
-    kappa = unname(metrics[["kappa"]])
+    observed_agreement = unname(metrics$observed),
+    kappa = unname(metrics$kappa)
   )
 }))
 write.csv(
@@ -503,7 +477,9 @@ if (profiles_only) {
   quit(save = "no", status = 0)
 }
 
-# Reproduce the locked panel boxes used for the manuscript figure.
+# Assemble the manuscript layout ----
+
+# Panel positions follow the manuscript figure layout.
 # PowerPoint slide coordinates are English Metric Units (EMU) on a
 # 12,192,000 x 6,858,000 canvas. Converting them to normalized coordinates
 # preserves the aspect ratio of every original vector panel.
@@ -631,7 +607,7 @@ write.csv(manifest, file.path(table_dir, "figure_output_manifest.csv"), row.name
 report <- c(
   "# Figure 1 PRE-GIA concordance reference-layout redraw",
   "",
-  "This visualization regenerates the concordance panels from the saved descriptive source tables using the locked manuscript layout.",
+  "This script builds the concordance panels from the descriptive source tables using the manuscript layout.",
   "",
   "## Panel order",
   "",
@@ -646,7 +622,7 @@ report <- c(
   "",
   "## Layout",
   "",
-  "The output uses the locked 16:9 canvas (13.333 x 7.5 inches). Panel bounding boxes are saved in tables/figure1_reference_layout_boxes.csv.",
+  "The output uses a 16:9 canvas (13.333 x 7.5 inches). Panel bounding boxes are saved in tables/figure1_reference_layout_boxes.csv.",
   "",
   "## Interpretation guardrails",
   "",
@@ -670,13 +646,7 @@ output_files <- output_files[file.exists(output_files)]
 output_manifest <- data.frame(
   relative_path = vapply(output_files, rel_path, character(1)),
   bytes = as.numeric(file.info(output_files)$size),
-  sha256 = vapply(
-    output_files,
-    digest::digest,
-    character(1),
-    file = TRUE,
-    algo = "sha256"
-  ),
+  sha256 = sha256_files(output_files),
   stringsAsFactors = FALSE
 )
 write.csv(

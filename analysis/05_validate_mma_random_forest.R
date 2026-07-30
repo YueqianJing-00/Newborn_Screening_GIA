@@ -1,6 +1,13 @@
 #!/usr/bin/env Rscript
 
-# Independent, read-only validation of the locked full RF rerun outputs.
+# Independent, read-only checks of the random-forest outputs.
+
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
+require_packages(c("data.table", "pROC", "digest"))
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -8,15 +15,7 @@ suppressPackageStartupMessages({
   library(digest)
 })
 
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
-
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
 analysis_dir <- file.path(paths$results, "mma_model")
 
@@ -26,12 +25,12 @@ if (length(run_arg) > 1L || length(setdiff(cli_args, run_arg)) > 0L) {
   stop("Usage: Rscript analysis/05_validate_mma_random_forest.R [--run-name=NAME]")
 }
 run_name <- if (length(run_arg) == 1L) sub("^--run-name=", "", run_arg) else "main_117_top10_metabolites"
-if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", run_name)) stop("Invalid run name.")
+if (!is_run_name(run_name)) stop("Invalid run name.")
 
 run_dir <- file.path(analysis_dir, "runs", run_name)
 table_dir <- file.path(run_dir, "tables")
 qa_dir <- file.path(run_dir, "qa")
-dir.create(qa_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(qa_dir)
 
 checks <- character()
 record_check <- function(label) {
@@ -66,6 +65,9 @@ required_paths <- file.path(table_dir, required_tables)
 assert_true(all(file.exists(required_paths)), "all required output tables exist")
 
 read_table <- function(name) fread(file.path(table_dir, name))
+
+# Load model outputs ----
+
 cohort_flow <- read_table("cohort_flow.csv")
 cohort <- read_table("cohort_summary.csv")
 input_checksums <- read_table("input_checksums.csv")
@@ -96,7 +98,7 @@ model_order <- c(
   "Clinical + metabolites + PRE + GIA"
 )
 
-# Cohort and specification.
+# Cohort and specification ----
 assert_true(
   nrow(cohort) == 1L && cohort$n == 117L && cohort$tp == 85L &&
     cohort$fp == 32L && cohort$tpn_0 == 117L && cohort$tpn_1 == 0L,
@@ -112,7 +114,7 @@ assert_true(
   identical(cohort_flow$n, c(378L, 378L, 165L, 162L, 161L, 117L, 117L)) &&
     identical(cohort_flow$tp, c(235L, 235L, 98L, 98L, 98L, 85L, 85L)) &&
     identical(cohort_flow$fp, c(143L, 143L, 67L, 64L, 63L, 32L, 32L)),
-  "cohort-flow counts match the locked sequential filters"
+  "cohort-flow counts match the analysis filters"
 )
 candidate_spec <- unique(model_spec[feature_group == "Metabolite candidate", feature])
 assert_true(
@@ -121,18 +123,16 @@ assert_true(
   "FC and C3/C2 are candidates rather than forced predictors"
 )
 
-# Current raw-input files must match the checksums used for the run.
+# Input checksums ----
 input_paths <- file.path(paths$data, basename(input_checksums$relative_path))
 assert_true(all(file.exists(input_paths)), "all recorded raw inputs still exist")
-current_input_sha <- vapply(
-  input_paths, digest::digest, character(1), file = TRUE, algo = "sha256"
-)
+current_input_sha <- sha256_files(input_paths)
 assert_true(
   identical(unname(current_input_sha), input_checksums$sha256),
   "raw-input SHA-256 checksums match the analysis ledger"
 )
 
-# Fold ledger.
+# Fold ledger ----
 assert_true(
   nrow(folds) == 117L * 100L && uniqueN(folds$repeat_id) == 100L &&
     uniqueN(folds$analysis_id) == 117L,
@@ -153,7 +153,7 @@ assert_true(
   "all 1,000 held-out folds contain both outcomes and 11-13 subjects"
 )
 
-# Training-fold feature selection and common-panel reuse.
+# Fold-wise feature selection ----
 assert_true(
   nrow(selection) == 40L * 100L * 10L &&
     uniqueN(selection$repeat_id) == 100L && uniqueN(selection$fold) == 10L,
@@ -215,7 +215,7 @@ assert_true(
   "all four nested model matrices have the expected predictor counts"
 )
 
-# OOF predictions and subject-level averaging.
+# OOF predictions and subject-level averaging ----
 assert_true(
   nrow(oof) == 117L * 100L * 4L && setequal(unique(oof$model), model_order) &&
     all(is.finite(oof$probability)) && all(oof$probability >= 0 & oof$probability <= 1),
@@ -313,7 +313,7 @@ assert_true(
   "saved empirical operating points reproduce and attain sensitivity >=0.95"
 )
 
-# Outcome-stratified, paired subject bootstrap and confidence intervals.
+# Bootstrap confidence intervals ----
 assert_true(
   nrow(bootstrap_metrics) == 2000L * 4L &&
     uniqueN(bootstrap_metrics$bootstrap_id) == 2000L &&
@@ -382,7 +382,7 @@ assert_near(paired_join$estimate, paired_join$estimate_recomputed, "paired point
 assert_near(paired_join$ci_low, paired_join$ci_low_recomputed, "paired lower limits reproduce")
 assert_near(paired_join$ci_high, paired_join$ci_high_recomputed, "paired upper limits reproduce")
 
-# Full-model held-out permutation importance.
+# Held-out permutation importance ----
 assert_true(
   nrow(importance) == 45L * 100L && uniqueN(importance$group_id) == 45L &&
     all(importance$model == model_order[4L]),
@@ -417,7 +417,7 @@ assert_near(
   "importance upper quartiles reproduce by predictor group"
 )
 
-# Figure-source and deidentification checks.
+# Figure sources and deidentification ----
 assert_true(
   nrow(panel_a) == 100L * 4L * 2L && uniqueN(panel_a$repeat_id) == 100L &&
     setequal(unique(panel_a$model), model_order),
@@ -448,14 +448,14 @@ assert_true(
   "restricted modeling dataset has 117 rows and does not export the TPN source field"
 )
 
-# Run-manifest lock and two-run determinism evidence.
+# Run settings and determinism evidence ----
 manifest_lookup <- setNames(manifest$value, manifest$field)
 assert_true(
   manifest_lookup[["repeats"]] == "100" && manifest_lookup[["folds"]] == "10" &&
     manifest_lookup[["ntree"]] == "1000" && manifest_lookup[["mtry"]] == "7" &&
     manifest_lookup[["bootstrap_replicates"]] == "2000" &&
     manifest_lookup[["master_seed"]] == "20260724",
-  "run manifest records the locked protocol and seed"
+  "run manifest records the analysis settings and seed"
 )
 determinism_path <- file.path(qa_dir, "deterministic_rerun_sha256.csv")
 if (file.exists(determinism_path)) {
@@ -470,7 +470,7 @@ report_path <- file.path(qa_dir, "validation_report.txt")
 report <- c(
   "RF rerun output validation",
   paste0("Validation time: ", format(Sys.time(), tz = "America/New_York")),
-  paste0("Run directory: ", relative_to_release(run_dir, project_root)),
+  paste0("Run directory: ", relative_to_project(run_dir, project_root)),
   "",
   checks,
   "",
@@ -486,9 +486,9 @@ output_files <- output_files[
   )
 ]
 output_manifest <- data.table(
-  relative_path = vapply(output_files, relative_to_release, character(1), root = project_root),
+  relative_path = vapply(output_files, relative_to_project, character(1), root = project_root),
   bytes = as.numeric(file.info(output_files)$size),
-  sha256 = vapply(output_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+  sha256 = sha256_files(output_files)
 )
 setorder(output_manifest, relative_path)
 fwrite(output_manifest, manifest_path)

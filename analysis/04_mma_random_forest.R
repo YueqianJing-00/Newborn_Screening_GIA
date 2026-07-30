@@ -1,20 +1,23 @@
 #!/usr/bin/env Rscript
 
-# Main manuscript analysis of MMA screen-positive newborns after excluding
-# newborns receiving TPN. The analysis compares four random-forest models:
-#   1. clinical variables + metabolites
-#   2. clinical variables + metabolites + PRE
-#   3. clinical variables + metabolites + continuous GIA
-#   4. clinical variables + metabolites + PRE + continuous GIA
-#
-# Within each training fold, the ten metabolite candidates with the largest
-# absolute univariate AUC distance from 0.5 are selected. The selected panel is
-# shared by all four models for that fold and is evaluated only in held-out
-# subjects. The 40-candidate pool contains the 38 metabolites in the prior
-# analysis plus FC and the derived C3/C2 ratio. Neither added candidate is
-# forced into a fitted model. Variable importance is evaluated only for the
-# full model by permuting predictors or predictor groups in held-out folds and
-# measuring the resulting increase in Brier score.
+# Random-forest analysis of the 117 MMA screen-positive newborns. Metabolites
+# are selected within each training fold, before the four predictor sets are fit.
+
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+helper_dir <- file.path(dirname(script_path), "..", "R")
+source(file.path(helper_dir, "project_setup.R"))
+source(file.path(helper_dir, "ancestry_helpers.R"))
+source(file.path(helper_dir, "pre_helpers.R"))
+source(file.path(helper_dir, "statistical_helpers.R"))
+
+required_packages <- c(
+  "data.table", "readxl", "randomForest", "pROC", "ggplot2",
+  "patchwork", "digest"
+)
+require_packages(required_packages)
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -25,26 +28,6 @@ suppressPackageStartupMessages({
   library(patchwork)
   library(digest)
 })
-
-required_packages <- c(
-  "data.table", "readxl", "randomForest", "pROC", "ggplot2",
-  "patchwork", "digest"
-)
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-if (length(missing_packages) > 0L) {
-  stop(
-    "Missing required R packages: ", paste(missing_packages, collapse = ", "),
-    ". Install them in the project environment before running this script."
-  )
-}
-
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
 
 parse_args <- function(args) {
   detected_cores <- suppressWarnings(parallel::detectCores(logical = FALSE))
@@ -80,7 +63,7 @@ parse_args <- function(args) {
     if (!key %in% names(defaults)) stop("Unknown argument: --", parts[[1]])
 
     if (key == "run_name") {
-      if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", parts[[2]])) {
+      if (!is_run_name(parts[[2]])) {
         stop("run_name must contain only letters, numbers, underscores, and hyphens.")
       }
       defaults[[key]] <- parts[[2]]
@@ -107,9 +90,7 @@ parse_args <- function(args) {
   defaults
 }
 
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
 analysis_dir <- file.path(paths$results, "mma_model")
 input_dir <- paths$data
@@ -119,9 +100,7 @@ run_dir <- file.path(analysis_dir, "runs", args$run_name)
 table_dir <- file.path(run_dir, "tables")
 figure_dir <- file.path(run_dir, "figures")
 log_dir <- file.path(run_dir, "logs")
-dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(table_dir, figure_dir, log_dir)
 
 log_file <- file.path(log_dir, "run.log")
 log_con <- file(log_file, open = "wt")
@@ -139,109 +118,31 @@ cat("Project root:", project_root, "\n")
 cat("Run directory:", run_dir, "\n")
 cat("Parameters:", paste(names(args), unlist(args), sep = "=", collapse = "; "), "\n")
 
+# Inputs and cohort ----
+
 input_files <- c(
   phenotype_workbook = file.path(input_dir, "Scharfelab-NBS1474samples-250207.xlsx"),
   admixture_q = file.path(input_dir, "1000G_378.5.Q"),
   admixture_fam = file.path(input_dir, "1000G_378.fam"),
   reference_metadata = file.path(input_dir, "all_phase3.psam")
 )
-missing_inputs <- input_files[!file.exists(input_files)]
-if (length(missing_inputs) > 0L) {
-  stop("Missing required inputs: ", paste(missing_inputs, collapse = ", "))
-}
+require_files(input_files)
 
 rel_path <- function(path) {
-  relative_to_release(path, project_root)
+  relative_to_project(path, project_root)
 }
 
 input_checksums <- data.table(
   input = names(input_files),
   relative_path = vapply(input_files, rel_path, character(1)),
   bytes = as.numeric(file.info(input_files)$size),
-  sha256 = vapply(input_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+  sha256 = sha256_files(input_files)
 )
 fwrite(input_checksums, file.path(table_dir, "input_checksums.csv"))
 
 numeric_clean <- function(x) suppressWarnings(as.numeric(as.character(x)))
 
-read_and_validate_global_ancestry <- function(q_path, fam_path, psam_path, study_n = 378L) {
-  fam <- fread(fam_path, header = FALSE)
-  q <- fread(q_path, header = FALSE)
-  psam <- fread(psam_path)
-  if (nrow(fam) != nrow(q)) stop("FAM and Q row counts differ.")
-  if (ncol(q) != 5L) stop("Expected five ADMIXTURE components, found ", ncol(q), ".")
-  if (nrow(fam) <= study_n) stop("FAM is too short for the study sample count.")
-
-  reference_n <- nrow(fam) - study_n
-  if (reference_n != 2158L) {
-    stop("Expected 2,158 reference samples plus 378 study samples; inferred reference_n=", reference_n)
-  }
-
-  psam_id_col <- grep("IID$", names(psam), value = TRUE)
-  if (length(psam_id_col) != 1L) stop("Could not uniquely identify IID column in PSAM.")
-  setnames(psam, psam_id_col, "IID")
-
-  q_cols <- paste0("V", seq_len(5L))
-  reference <- data.table(IID = fam$V2[seq_len(reference_n)], q[seq_len(reference_n)])
-  reference <- merge(
-    reference,
-    psam[, .(IID, SuperPop)],
-    by = "IID",
-    all.x = TRUE,
-    sort = FALSE
-  )
-  if (anyNA(reference$SuperPop)) {
-    stop("Some selected reference IDs are absent from all_phase3.psam.")
-  }
-
-  reference_means <- reference[, lapply(.SD, mean), by = SuperPop, .SDcols = q_cols]
-  expected_components <- c("AFR", "AMR", "EAS", "EUR", "SAS")
-  if (!setequal(reference_means$SuperPop, expected_components)) {
-    stop("Reference superpopulations are not exactly AFR/AMR/EAS/EUR/SAS.")
-  }
-
-  mapping <- reference_means[, {
-    values <- unlist(.SD)
-    index <- which.max(values)
-    .(
-      q_column = names(values)[index],
-      mean_reference_membership = values[index]
-    )
-  }, by = SuperPop, .SDcols = q_cols]
-  if (uniqueN(mapping$q_column) != 5L) stop("ADMIXTURE component mapping is not one-to-one.")
-  if (any(mapping$mean_reference_membership < 0.95)) {
-    stop("Reference-based ADMIXTURE component mapping is not sufficiently separated.")
-  }
-
-  study_rows <- (reference_n + 1L):nrow(fam)
-  study_ids <- as.character(fam$V2[study_rows])
-  raw_p04 <- grepl("^p04w", study_ids)
-  if (sum(raw_p04) != 48L) {
-    stop("Expected 48 unprefixed p04 study IDs, found ", sum(raw_p04), ".")
-  }
-  study_ids[raw_p04] <- paste0("NBSfalsepos_", study_ids[raw_p04])
-  if (anyDuplicated(study_ids)) stop("Duplicate study IDs after normalization.")
-
-  study <- as.data.table(q[study_rows])
-  q_to_label <- setNames(mapping$SuperPop, mapping$q_column)
-  setnames(study, q_cols, unname(q_to_label[q_cols]))
-  study[, raw_id := study_ids]
-  setcolorder(study, c("raw_id", expected_components))
-  maximum_sum_error <- max(abs(rowSums(study[, ..expected_components]) - 1))
-  if (maximum_sum_error > 5e-4) {
-    stop("ADMIXTURE study rows do not sum to 1 within tolerance.")
-  }
-
-  list(
-    study = study,
-    mapping = mapping[order(SuperPop)],
-    reference_means = reference_means[order(SuperPop)],
-    reference_n = reference_n,
-    maximum_sum_error = maximum_sum_error
-  )
-}
-
-global_ancestry <- read_and_validate_global_ancestry(
+global_ancestry <- read_global_ancestry(
   input_files[["admixture_q"]],
   input_files[["admixture_fam"]],
   input_files[["reference_metadata"]]
@@ -265,33 +166,18 @@ if (!identical(as.character(phenotype[[id_col]]), global_ancestry$study$raw_id))
   stop("ID-based phenotype ordering failed.")
 }
 
-east_asian_categories <- c("Japanese", "Chinese", "Laos", "Korean", "Vietnamese", "Filipino")
-south_asian_categories <- c("Asian East Indian")
 pre_columns <- paste0("RACE_ETH_", 1:4)
 if (!all(pre_columns %in% names(phenotype))) {
   stop("Workbook is missing one or more parent-reported ethnicity columns.")
 }
 for (column in pre_columns) {
   values <- as.character(phenotype[[column]])
-  values[values %in% east_asian_categories] <- "EAS"
-  values[values %in% south_asian_categories] <- "SAS"
+  values[values %in% east_asian_pre_labels] <- "EAS"
+  values[values %in% south_asian_pre_labels] <- "SAS"
   set(phenotype, j = column, value = values)
 }
 
-collapse_pre <- function(x) {
-  x <- unique(x[!is.na(x) & nzchar(x)])
-  # Prespecified PRE hierarchy:
-  # Hispanic > Black > EAS > SAS > Middle Eastern > Native American > White.
-  if ("Hispanic" %in% x) return("Hispanic")
-  if ("Black" %in% x) return("Black")
-  if ("EAS" %in% x) return("EAS")
-  if ("SAS" %in% x) return("SAS")
-  if ("Middle Eastern" %in% x) return("Middle Eastern")
-  if ("Native American" %in% x) return("Native American")
-  if (length(x) == 1L && identical(x, "White")) return("White")
-  "Other/Unknown"
-}
-phenotype[, PRE_category := apply(.SD, 1, collapse_pre), .SDcols = pre_columns]
+phenotype[, PRE_category := apply(.SD, 1, assign_pre), .SDcols = pre_columns]
 
 base_metabolite_features <- c(
   "ALA", "ARG", "C02", "C03", "C03DC", "C04", "C05", "C051", "C05DC", "C05OH",
@@ -372,6 +258,7 @@ full_candidate_matrix_all <- cbind(
   gia_matrix_all
 )
 
+# Apply the cohort criteria in the order shown in the flow table.
 stage_masks <- list()
 stage_masks[["Matched 378 study samples"]] <- rep(TRUE, nrow(joined))
 stage_masks[["MMA rule evaluable"]] <- stage_masks[[1]] & joined$mma_evaluable
@@ -380,9 +267,9 @@ stage_masks[["Birth weight 1,000-5,000 g"]] <- stage_masks[[3]] &
   !is.na(joined$BIRTH_WT) & joined$BIRTH_WT >= 1000 & joined$BIRTH_WT <= 5000
 stage_masks[["Age at collection 12-168 h"]] <- stage_masks[[4]] &
   !is.na(joined$AGE_AT_COLCTN) & joined$AGE_AT_COLCTN >= 12 & joined$AGE_AT_COLCTN <= 168
-stage_masks[["TPN unexposed (TPN=0)"]] <- stage_masks[[5]] &
+stage_masks[["Exclude newborns receiving TPN"]] <- stage_masks[[5]] &
   !is.na(joined$TPN_HYPERAL) & joined$TPN_HYPERAL == 0
-stage_masks[["Complete prespecified predictors and candidate pool"]] <- stage_masks[[6]] &
+stage_masks[["Complete data for predictors and metabolite candidates"]] <- stage_masks[[6]] &
   complete.cases(full_candidate_matrix_all)
 
 cohort_flow <- rbindlist(lapply(seq_along(stage_masks), function(index) {
@@ -414,6 +301,8 @@ storage.mode(clinical_x) <- "double"
 storage.mode(metabolite_x) <- "double"
 storage.mode(pre_x) <- "double"
 storage.mode(gia_x) <- "double"
+
+# Predictor sets ----
 
 model_order <- c(
   "Clinical + metabolites",
@@ -481,7 +370,7 @@ model_specification <- rbindlist(lapply(model_order, function(model_name) {
       feature = colnames(clinical_x),
       feature_group = "Clinical",
       role = "always included",
-      note = "Prespecified clinical predictor; no imputation or tuning"
+      note = "Clinical predictor; no imputation or tuning"
     ),
     data.table(
       model = model_name,
@@ -499,7 +388,7 @@ model_specification <- rbindlist(lapply(model_order, function(model_name) {
       feature = colnames(pre_x),
       feature_group = "PRE",
       role = "always included",
-      note = "Prespecified one-hot indicators; White reference"
+      note = "One-hot indicators; White reference"
     ),
     if (include_gia) data.table(
       model = model_name,
@@ -538,15 +427,7 @@ cohort_summary <- data.table(
 )
 fwrite(cohort_summary, file.path(table_dir, "cohort_summary.csv"))
 
-make_stratified_folds <- function(outcome, k, seed) {
-  set.seed(seed)
-  fold <- integer(length(outcome))
-  for (level in levels(outcome)) {
-    index <- sample(which(outcome == level))
-    fold[index] <- rep(seq_len(k), length.out = length(index))
-  }
-  fold
-}
+# Cross-validation folds ----
 
 fold_list <- lapply(seq_len(args$repeats), function(repeat_id) {
   make_stratified_folds(y, args$folds, args$seed + repeat_id * 10000L)
@@ -567,50 +448,6 @@ fold_assignments <- rbindlist(lapply(seq_len(args$repeats), function(repeat_id) 
   )
 }))
 fwrite(fold_assignments, file.path(table_dir, "fold_assignments.csv"))
-
-discrete_operating_point <- function(outcome, probability, target_sensitivity = 0.95) {
-  outcome <- as.character(outcome)
-  thresholds <- sort(unique(probability), decreasing = TRUE)
-  candidates <- rbindlist(lapply(thresholds, function(threshold) {
-    positive <- probability >= threshold
-    true_positive <- sum(positive & outcome == "TP")
-    false_negative <- sum(!positive & outcome == "TP")
-    true_negative <- sum(!positive & outcome == "FP")
-    false_positive <- sum(positive & outcome == "FP")
-    data.table(
-      threshold = threshold,
-      tp = true_positive,
-      fn = false_negative,
-      tn = true_negative,
-      fp = false_positive,
-      sensitivity = true_positive / (true_positive + false_negative),
-      specificity = true_negative / (true_negative + false_positive)
-    )
-  }))
-  candidates <- candidates[sensitivity >= target_sensitivity]
-  if (nrow(candidates) == 0L) stop("No empirical threshold reaches target sensitivity.")
-  setorder(candidates, -specificity, -threshold)
-  candidates[1]
-}
-
-metric_bundle <- function(outcome, probability) {
-  outcome_factor <- factor(outcome, levels = c("FP", "TP"))
-  roc_object <- pROC::roc(
-    response = outcome_factor,
-    predictor = probability,
-    levels = c("FP", "TP"),
-    direction = "<",
-    quiet = TRUE
-  )
-  operating_point <- discrete_operating_point(outcome_factor, probability, 0.95)
-  outcome_numeric <- as.numeric(outcome_factor == "TP")
-  list(
-    auc = as.numeric(pROC::auc(roc_object)),
-    specificity95 = operating_point$specificity,
-    brier = mean((probability - outcome_numeric)^2),
-    operating_point = operating_point
-  )
-}
 
 full_model_name <- model_order[[4]]
 pre_feature_columns <- colnames(pre_x)
@@ -669,6 +506,8 @@ importance_group_metadata <- rbindlist(lapply(names(importance_groups), function
   )
 }))
 fwrite(importance_group_metadata, file.path(table_dir, "importance_group_definition.csv"))
+
+# Fold-wise selection and fitting ----
 
 rank_metabolites_in_training <- function(train_index) {
   ranking <- rbindlist(lapply(colnames(metabolite_x), function(feature) {
@@ -852,7 +691,7 @@ fit_one_repeat <- function(repeat_id) {
   }
 
   metrics <- rbindlist(lapply(model_order, function(model_name) {
-    performance <- metric_bundle(y, predictions[[model_name]])
+    performance <- classification_metrics(y, predictions[[model_name]])
     data.table(
       repeat_id = repeat_id,
       model = model_name,
@@ -922,6 +761,8 @@ if (.Platform$OS.type == "unix" && args$cores > 1L) {
 if (any(vapply(cv_results, inherits, logical(1), what = "try-error"))) {
   stop("One or more cross-validation workers failed.")
 }
+
+# Summaries across repeats ----
 
 oof_predictions <- rbindlist(lapply(cv_results, `[[`, "predictions"))
 repeat_metrics <- rbindlist(lapply(cv_results, `[[`, "metrics"))
@@ -1084,7 +925,7 @@ fwrite(mean_oof_predictions, file.path(table_dir, "mean_oof_predictions.csv"))
 
 point_results <- lapply(model_order, function(model_name) {
   model_predictions <- mean_oof_predictions[model == model_name]
-  performance <- metric_bundle(model_predictions$outcome, model_predictions$probability)
+  performance <- classification_metrics(model_predictions$outcome, model_predictions$probability)
   list(
     performance = data.table(
       model = model_name,
@@ -1110,6 +951,8 @@ if (any(point_operating_points$achieved_sensitivity < 0.95)) {
 }
 fwrite(point_operating_points, file.path(table_dir, "primary_operating_points.csv"))
 
+# Subject-level bootstrap inference ----
+
 set.seed(args$seed + 900000L)
 subject_table <- unique(mean_oof_predictions[, .(analysis_id, outcome)])
 true_positive_index <- which(subject_table$outcome == "TP")
@@ -1128,7 +971,7 @@ bootstrap_results <- lapply(seq_len(args$bootstrap), function(bootstrap_id) {
       mean_oof_predictions[model == model_name]$analysis_id
     )
     sampled_probability <- unname(probability_lookup[sampled_ids])
-    performance <- metric_bundle(sampled_outcome, sampled_probability)
+    performance <- classification_metrics(sampled_outcome, sampled_probability)
     data.table(
       bootstrap_id = bootstrap_id,
       model = model_name,
@@ -1167,7 +1010,6 @@ if (any(bootstrap_weight_check$sampled_tp != sum(y == "TP")) ||
   stop("Outcome-stratified bootstrap did not preserve class sample sizes.")
 }
 
-ci <- function(x) unname(quantile(x, c(0.025, 0.975), na.rm = TRUE, type = 6))
 bootstrap_long <- melt(
   bootstrap_metrics,
   id.vars = c("bootstrap_id", "model"),
@@ -1184,8 +1026,8 @@ metric_lookup <- c(
 )
 bootstrap_long[, metric := unname(metric_lookup[metric_code])]
 bootstrap_intervals <- bootstrap_long[, .(
-  ci_low = ci(bootstrap_estimate)[1],
-  ci_high = ci(bootstrap_estimate)[2]
+  ci_low = quantile_ci(bootstrap_estimate)[1],
+  ci_high = quantile_ci(bootstrap_estimate)[2]
 ), by = .(model, metric)]
 primary_performance <- merge(
   point_performance,
@@ -1234,14 +1076,16 @@ paired_effects <- rbindlist(lapply(seq_len(nrow(contrast_definitions)), function
       augmented_model = definition$augmented_model,
       reference_model = definition$reference_model,
       estimate = point_delta,
-      ci_low = ci(bootstrap_delta)[1],
-      ci_high = ci(bootstrap_delta)[2],
+      ci_low = quantile_ci(bootstrap_delta)[1],
+      ci_high = quantile_ci(bootstrap_delta)[2],
       favorable_direction = ifelse(metric_name == "Brier score", "Negative", "Positive"),
       inference_note = "Paired outcome-stratified subject bootstrap; repeated CV runs were averaged before inference"
     )
   }))
 }))
 fwrite(paired_effects, file.path(table_dir, "paired_effects.csv"))
+
+# Figure source tables ----
 
 performance_plot_source <- melt(
   repeat_metrics,
@@ -1294,6 +1138,8 @@ importance_colors <- c(
   PRE = "#0072B2",
   GIA = "#D55E00"
 )
+
+# Diagnostic plot ----
 
 theme_publication <- function(base_size = 10) {
   theme_classic(base_size = base_size, base_family = "sans") +

@@ -1,6 +1,13 @@
 #!/usr/bin/env Rscript
 
-# Final two-panel Figure 4 generated from the saved prediction-shift analysis.
+# Two-panel Figure 4 generated from the prediction-shift analysis.
+
+script_path <- normalizePath(
+  sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+  mustWork = TRUE
+)
+source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
+require_packages(c("data.table", "ggplot2", "patchwork", "digest"))
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -8,20 +15,6 @@ suppressPackageStartupMessages({
   library(patchwork)
   library(digest)
 })
-
-required_packages <- c("data.table", "ggplot2", "patchwork", "digest")
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-if (length(missing_packages) > 0L) {
-  stop("Missing required R packages: ", paste(missing_packages, collapse = ", "))
-}
-
-get_script_path <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) stop("Could not determine script path.")
-  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
-}
 
 parse_args <- function(args) {
   defaults <- list(
@@ -33,7 +26,7 @@ parse_args <- function(args) {
     parts <- strsplit(sub("^--", "", arg), "=", fixed = TRUE)[[1]]
     key <- gsub("-", "_", parts[[1]])
     if (!key %in% names(defaults)) stop("Unknown argument: --", parts[[1]])
-    if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", parts[[2]])) {
+    if (!is_run_name(parts[[2]])) {
       stop(key, " contains unsupported characters.")
     }
     defaults[[key]] <- parts[[2]]
@@ -41,9 +34,7 @@ parse_args <- function(args) {
   defaults
 }
 
-script_path <- get_script_path()
-source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
-paths <- get_release_paths(script_path)
+paths <- project_paths(script_path)
 project_root <- paths$root
 analysis_dir <- file.path(paths$results, "figure4_analysis")
 args <- parse_args(commandArgs(trailingOnly = TRUE))
@@ -54,10 +45,9 @@ table_dir <- file.path(run_dir, "tables")
 figure_dir <- file.path(run_dir, "figures")
 text_dir <- file.path(run_dir, "text")
 log_dir <- file.path(run_dir, "logs")
-dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(text_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+make_directories(table_dir, figure_dir, text_dir, log_dir)
+
+# Prediction-shift sources ----
 
 log_file <- file.path(log_dir, "run.log")
 log_con <- file(log_file, open = "wt")
@@ -70,23 +60,20 @@ on.exit({
 }, add = TRUE)
 
 rel_path <- function(path) {
-  relative_to_release(path, project_root)
+  relative_to_project(path, project_root)
 }
 
 source_files <- c(
   subject = file.path(source_tables, "subject_level_case_patterns_source_restricted_internal.csv"),
   confidence = file.path(source_tables, "gia_confidence_score_shift_summary.csv")
 )
-missing_files <- source_files[!file.exists(source_files)]
-if (length(missing_files) > 0L) {
-  stop("Missing source files: ", paste(missing_files, collapse = ", "))
-}
+require_files(source_files, "source file")
 
 input_manifest <- data.table(
   input = names(source_files),
   relative_path = vapply(source_files, rel_path, character(1)),
   bytes = as.numeric(file.info(source_files)$size),
-  sha256 = vapply(source_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+  sha256 = sha256_files(source_files)
 )
 fwrite(input_manifest, file.path(table_dir, "input_checksums.csv"))
 
@@ -94,7 +81,7 @@ subject <- fread(source_files[["subject"]])
 confidence <- fread(source_files[["confidence"]])
 
 if (nrow(subject) != 117L || sum(subject$outcome == "TP") != 85L || sum(subject$outcome == "FP") != 32L) {
-  stop("Subject source did not reproduce the locked 117-newborn cohort.")
+  stop("Subject source did not reproduce the 117-newborn cohort.")
 }
 if (nrow(confidence) != 4L || !setequal(confidence$outcome, c("TP", "FP"))) {
   stop("GIA-confidence summary did not reproduce the four expected outcome-stratum cells.")
@@ -105,6 +92,8 @@ fp_color <- "#D55E00"
 neutral_dark <- "#333333"
 neutral_mid <- "#7A7A7A"
 neutral_light <- "#D9D9D9"
+
+# Figure panels ----
 
 theme_journal <- function(base_size = 8) {
   theme_classic(base_size = base_size, base_family = "Helvetica") +
@@ -306,7 +295,7 @@ output_files <- c(
 output_manifest <- data.table(
   relative_path = vapply(output_files, rel_path, character(1)),
   bytes = as.numeric(file.info(output_files)$size),
-  sha256 = vapply(output_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+  sha256 = sha256_files(output_files)
 )
 fwrite(output_manifest, file.path(run_dir, "output_manifest.csv"))
 
