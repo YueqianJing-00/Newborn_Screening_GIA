@@ -1,0 +1,34 @@
+# R and operating-system files
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+.DS_Store
+renv/library/
+
+# Controlled-access inputs must never be committed.
+data/raw/**
+!data/raw/README.md
+*.xlsx
+*.xls
+*.fam
+*.psam
+*.Q
+*.rds
+*.RData
+*.rdata
+
+# Generated results are private by default. Curate aggregate files explicitly
+# only after disclosure/governance review.
+results/**
+!results/README.md
+
+# Defense in depth for participant-level or resampling outputs.
+**/*restricted_internal*
+**/fold_assignments.csv
+**/oof_predictions*.csv
+**/mean_oof_predictions.csv
+**/modeling_dataset*.csv
+**/subject_bootstrap_weights.csv
+**/subject_level*.csv
+

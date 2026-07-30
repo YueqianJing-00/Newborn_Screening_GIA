@@ -1,0 +1,316 @@
+#!/usr/bin/env Rscript
+
+# Final two-panel Figure 4 generated from the saved prediction-shift analysis.
+
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+  library(patchwork)
+  library(digest)
+})
+
+required_packages <- c("data.table", "ggplot2", "patchwork", "digest")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages) > 0L) {
+  stop("Missing required R packages: ", paste(missing_packages, collapse = ", "))
+}
+
+get_script_path <- function() {
+  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(file_arg) != 1L) stop("Could not determine script path.")
+  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
+}
+
+parse_args <- function(args) {
+  defaults <- list(
+    source_run = "main_prediction_shifts",
+    run_name = "final"
+  )
+  for (arg in args) {
+    if (!grepl("^--[A-Za-z0-9_-]+=", arg)) stop("Malformed argument: ", arg)
+    parts <- strsplit(sub("^--", "", arg), "=", fixed = TRUE)[[1]]
+    key <- gsub("-", "_", parts[[1]])
+    if (!key %in% names(defaults)) stop("Unknown argument: --", parts[[1]])
+    if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", parts[[2]])) {
+      stop(key, " contains unsupported characters.")
+    }
+    defaults[[key]] <- parts[[2]]
+  }
+  defaults
+}
+
+script_path <- get_script_path()
+source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
+paths <- get_release_paths(script_path)
+project_root <- paths$root
+analysis_dir <- file.path(paths$results, "figure4_analysis")
+args <- parse_args(commandArgs(trailingOnly = TRUE))
+source_run <- file.path(analysis_dir, "runs", args$source_run)
+source_tables <- file.path(source_run, "tables")
+run_dir <- file.path(paths$results, "figure4", args$run_name)
+table_dir <- file.path(run_dir, "tables")
+figure_dir <- file.path(run_dir, "figures")
+text_dir <- file.path(run_dir, "text")
+log_dir <- file.path(run_dir, "logs")
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(text_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+
+log_file <- file.path(log_dir, "run.log")
+log_con <- file(log_file, open = "wt")
+sink(log_con, type = "output", split = TRUE)
+sink(log_con, type = "message", append = TRUE)
+on.exit({
+  sink(type = "message")
+  sink(type = "output")
+  close(log_con)
+}, add = TRUE)
+
+rel_path <- function(path) {
+  relative_to_release(path, project_root)
+}
+
+source_files <- c(
+  subject = file.path(source_tables, "subject_level_case_patterns_source_restricted_internal.csv"),
+  confidence = file.path(source_tables, "gia_confidence_score_shift_summary.csv")
+)
+missing_files <- source_files[!file.exists(source_files)]
+if (length(missing_files) > 0L) {
+  stop("Missing source files: ", paste(missing_files, collapse = ", "))
+}
+
+input_manifest <- data.table(
+  input = names(source_files),
+  relative_path = vapply(source_files, rel_path, character(1)),
+  bytes = as.numeric(file.info(source_files)$size),
+  sha256 = vapply(source_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+)
+fwrite(input_manifest, file.path(table_dir, "input_checksums.csv"))
+
+subject <- fread(source_files[["subject"]])
+confidence <- fread(source_files[["confidence"]])
+
+if (nrow(subject) != 117L || sum(subject$outcome == "TP") != 85L || sum(subject$outcome == "FP") != 32L) {
+  stop("Subject source did not reproduce the locked 117-newborn cohort.")
+}
+if (nrow(confidence) != 4L || !setequal(confidence$outcome, c("TP", "FP"))) {
+  stop("GIA-confidence summary did not reproduce the four expected outcome-stratum cells.")
+}
+
+tp_color <- "#0072B2"
+fp_color <- "#D55E00"
+neutral_dark <- "#333333"
+neutral_mid <- "#7A7A7A"
+neutral_light <- "#D9D9D9"
+
+theme_journal <- function(base_size = 8) {
+  theme_classic(base_size = base_size, base_family = "Helvetica") +
+    theme(
+      line = element_line(linewidth = 0.36, color = neutral_dark),
+      axis.line = element_line(linewidth = 0.36, color = neutral_dark),
+      axis.ticks = element_line(linewidth = 0.36, color = neutral_dark),
+      axis.ticks.length = grid::unit(1.4, "mm"),
+      axis.text = element_text(size = 7, color = neutral_dark),
+      axis.title = element_text(size = 8, color = neutral_dark),
+      legend.text = element_text(size = 7, color = neutral_dark),
+      legend.title = element_blank(),
+      plot.tag = element_text(size = 9, face = "bold", color = neutral_dark),
+      plot.tag.position = c(0, 1),
+      plot.margin = margin(4, 5, 4, 5),
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA)
+    )
+}
+
+# Panel A: subject-level changes signed toward the observed outcome.
+subject[, outcome_label := factor(
+  outcome,
+  levels = c("FP", "TP"),
+  labels = c("False positive (n = 32)", "True positive (n = 85)")
+)]
+subject[, shift_pp := 100 * correct_direction_shift]
+
+panel_a_source <- subject[, .(
+  anonymous_plot_index = seq_len(.N),
+  outcome,
+  outcome_label,
+  shift_pp
+)]
+fwrite(
+  panel_a_source,
+  file.path(table_dir, "figure4_panel_A_source_restricted_internal.csv")
+)
+
+panel_a <- ggplot(
+  panel_a_source,
+  aes(x = shift_pp, y = outcome_label, color = outcome)
+) +
+  geom_vline(xintercept = 0, linewidth = 0.36, linetype = "22", color = neutral_mid) +
+  geom_boxplot(
+    aes(group = outcome_label),
+    width = 0.22,
+    outlier.shape = NA,
+    fill = NA,
+    color = neutral_dark,
+    linewidth = 0.38
+  ) +
+  geom_jitter(
+    size = 1.25,
+    alpha = 0.58,
+    stroke = 0,
+    position = position_jitter(width = 0, height = 0.105, seed = 20260722L)
+  ) +
+  scale_color_manual(values = c(TP = tp_color, FP = fp_color)) +
+  scale_x_continuous(
+    limits = c(-18, 18),
+    breaks = seq(-15, 15, by = 5),
+    expand = expansion(mult = c(0.01, 0.01))
+  ) +
+  labs(
+    tag = "A",
+    x = "Change toward observed outcome (percentage points)",
+    y = NULL
+  ) +
+  theme_journal() +
+  theme(
+    legend.position = "none",
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(5, 8, 5, 6)
+  )
+
+# Panel B: mean raw score changes by GIA concentration and observed outcome.
+confidence[, confidence_group := fifelse(
+  grepl(">70%", majority_GIA_confidence, fixed = TRUE),
+  ">70%",
+  paste0(intToUtf8(8804), "70%")
+)]
+confidence[, outcome_name := fifelse(outcome == "TP", "TP", "FP")]
+confidence[, row_label := paste0(confidence_group, ", ", outcome_name, " (n = ", n, ")")]
+row_order <- c(
+  ">70%, TP (n = 71)",
+  ">70%, FP (n = 15)",
+  paste0(intToUtf8(8804), "70%, TP (n = 14)"),
+  paste0(intToUtf8(8804), "70%, FP (n = 17)")
+)
+confidence[, row_label := factor(row_label, levels = rev(row_order))]
+confidence[, `:=`(
+  estimate_pp = 100 * mean_probability_change,
+  low_pp = 100 * change_ci_low,
+  high_pp = 100 * change_ci_high,
+  estimate_label = sprintf("%+.2f", 100 * mean_probability_change)
+)]
+fwrite(
+  confidence[, .(
+    confidence_group, outcome, n, estimate_pp, low_pp, high_pp, estimate_label
+  )],
+  file.path(table_dir, "figure4_panel_B_source_aggregate.csv")
+)
+
+panel_b <- ggplot(
+  confidence,
+  aes(x = estimate_pp, y = row_label, color = outcome, shape = outcome)
+) +
+  geom_vline(xintercept = 0, linewidth = 0.36, linetype = "22", color = neutral_mid) +
+  geom_hline(yintercept = 2.5, linewidth = 0.36, color = neutral_light) +
+  geom_errorbarh(
+    aes(xmin = low_pp, xmax = high_pp),
+    height = 0.13,
+    linewidth = 0.42
+  ) +
+  geom_point(size = 2.25, stroke = 0.45, fill = "white") +
+  geom_text(
+    aes(x = 10.55, label = estimate_label),
+    hjust = 1,
+    color = neutral_dark,
+    size = 2.45,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = c(TP = tp_color, FP = fp_color)) +
+  scale_shape_manual(values = c(TP = 21, FP = 24)) +
+  scale_x_continuous(
+    limits = c(-8.0, 11.0),
+    breaks = c(-5, 0, 5),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  labs(
+    tag = "B",
+    x = "Raw change in predicted TP probability\n(percentage points; 95% CI)",
+    y = NULL
+  ) +
+  theme_journal() +
+  theme(
+    legend.position = "none",
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(5, 6, 5, 8)
+  )
+
+figure <- (panel_a | panel_b) +
+  plot_layout(widths = c(1.05, 0.95)) &
+  theme(plot.background = element_rect(fill = "white", color = NA))
+
+width_in <- 180 / 25.4
+height_in <- 78 / 25.4
+pdf_path <- file.path(figure_dir, "Figure4_GIA_case_patterns_two_panel.pdf")
+png_path <- file.path(figure_dir, "Figure4_GIA_case_patterns_two_panel_300dpi.png")
+tiff_path <- file.path(figure_dir, "Figure4_GIA_case_patterns_two_panel_600dpi.tiff")
+
+ggsave(pdf_path, figure, width = width_in, height = height_in, device = cairo_pdf, bg = "white")
+ggsave(png_path, figure, width = width_in, height = height_in, dpi = 300, bg = "white")
+ggsave(
+  tiff_path,
+  figure,
+  width = width_in,
+  height = height_in,
+  dpi = 600,
+  compression = "lzw",
+  bg = "white"
+)
+
+run_manifest <- data.table(
+  field = c(
+    "analysis", "script", "source_run", "run_timestamp", "figure_width_mm",
+    "figure_height_mm", "font", "base_font_size_pt", "minimum_line_width_mm",
+    "panel_labels", "color_palette", "pdf", "png", "tiff"
+  ),
+  value = c(
+    "Two-panel journal-style redraw of Figure 4 from the specified case-pattern analysis run",
+    rel_path(script_path),
+    rel_path(source_run),
+    format(Sys.time(), tz = "America/New_York"),
+    180,
+    78,
+    "Helvetica",
+    8,
+    0.36,
+    "Capital bold A and B",
+    "Color-blind-safe blue/vermillion with neutral greys; color paired with outcome labels and shapes",
+    rel_path(pdf_path),
+    rel_path(png_path),
+    rel_path(tiff_path)
+  )
+)
+fwrite(run_manifest, file.path(table_dir, "run_manifest.csv"))
+capture.output(sessionInfo(), file = file.path(run_dir, "sessionInfo.txt"))
+
+output_files <- c(
+  list.files(table_dir, full.names = TRUE),
+  list.files(figure_dir, full.names = TRUE),
+  list.files(text_dir, full.names = TRUE),
+  file.path(run_dir, "sessionInfo.txt")
+)
+output_manifest <- data.table(
+  relative_path = vapply(output_files, rel_path, character(1)),
+  bytes = as.numeric(file.info(output_files)$size),
+  sha256 = vapply(output_files, digest::digest, character(1), file = TRUE, algo = "sha256")
+)
+fwrite(output_manifest, file.path(run_dir, "output_manifest.csv"))
+
+cat("Two-panel Figure 4 redraw complete\n")
+cat("PDF:", rel_path(pdf_path), "\n")
+cat("PNG:", rel_path(png_path), "\n")
+cat("TIFF:", rel_path(tiff_path), "\n")

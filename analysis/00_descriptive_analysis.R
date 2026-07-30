@@ -1,0 +1,1436 @@
+#!/usr/bin/env Rscript
+
+# Reproducible PRE-GIA descriptive analyses used by the manuscript.
+# Raw inputs remain outside version control. Outputs are written below results/.
+
+suppressPackageStartupMessages({
+  library(data.table)
+  library(dplyr)
+  library(ggplot2)
+  library(patchwork)
+  library(readxl)
+  library(scales)
+  library(tidyr)
+})
+
+required_packages <- c(
+  "data.table", "digest", "dplyr", "ggplot2", "patchwork", "ragg",
+  "readxl", "scales", "tidyr"
+)
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages) > 0) {
+  stop("Missing required R packages: ", paste(missing_packages, collapse = ", "))
+}
+
+get_script_path <- function() {
+  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(file_arg) != 1L) stop("Could not determine script path from --file.")
+  normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
+}
+
+script_path <- get_script_path()
+source(file.path(dirname(script_path), "..", "R", "project_paths.R"))
+paths <- get_release_paths(script_path)
+project_root <- paths$root
+input_dir <- paths$data
+analysis_dir <- file.path(paths$results, "descriptive")
+table_dir <- file.path(analysis_dir, "tables")
+figure_dir <- file.path(analysis_dir, "figures")
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+
+seed <- 20260710L
+bootstrap_replicates <- 10000L
+set.seed(seed)
+
+input_files <- c(
+  phenotype_workbook = file.path(
+    input_dir, "Scharfelab-NBS1474samples-250207.xlsx"
+  ),
+  joint_q = file.path(input_dir, "1000G_378.5.Q"),
+  joint_fam = file.path(input_dir, "1000G_378.fam"),
+  reference_selection = file.path(input_dir, "sample_pure.txt"),
+  reference_metadata = file.path(input_dir, "all_phase3.psam"),
+  reference_selection_q = file.path(input_dir, "gwas_ld_pruned.5.Q")
+)
+missing_inputs <- input_files[!file.exists(input_files)]
+if (length(missing_inputs) > 0) {
+  stop("Missing required inputs: ", paste(missing_inputs, collapse = ", "))
+}
+
+input_checksums <- data.frame(
+  input_role = names(input_files),
+  file = basename(input_files),
+  sha256 = vapply(
+    input_files,
+    digest::digest,
+    character(1),
+    algo = "sha256",
+    file = TRUE
+  ),
+  stringsAsFactors = FALSE
+)
+write.csv(
+  input_checksums,
+  file.path(table_dir, "input_checksums_sha256.csv"),
+  row.names = FALSE
+)
+
+# -----------------------------------------------------------------------------
+# Read and validate inputs
+# -----------------------------------------------------------------------------
+
+phenotype <- read_excel(
+  input_files[["phenotype_workbook"]],
+  sheet = "1474 DBS with full NBS data",
+  .name_repair = "unique_quiet"
+)
+fam <- fread(input_files[["joint_fam"]], header = FALSE)
+joint_q_raw <- as.matrix(fread(input_files[["joint_q"]], header = FALSE))
+reference_selection <- fread(
+  input_files[["reference_selection"]],
+  header = FALSE,
+  col.names = c("IID", "SuperPop")
+)
+reference_metadata <- fread(input_files[["reference_metadata"]])
+reference_q_raw <- as.matrix(
+  fread(input_files[["reference_selection_q"]], header = FALSE)
+)
+
+stopifnot(
+  nrow(fam) == nrow(joint_q_raw),
+  ncol(joint_q_raw) == 5L,
+  nrow(reference_selection) == 2158L,
+  nrow(reference_metadata) == nrow(reference_q_raw),
+  ncol(reference_q_raw) == 5L,
+  !anyDuplicated(reference_selection$IID),
+  !anyDuplicated(phenotype[["NBS-sample-ID"]])
+)
+
+# The reference set is identified explicitly from sample_pure.txt, avoiding a
+# positional "first 2,158 rows" assumption.
+is_reference <- fam$V2 %in% reference_selection$IID
+stopifnot(sum(is_reference) == 2158L, sum(!is_reference) == 378L)
+
+reference_ids_in_joint_order <- as.character(fam$V2[is_reference])
+stopifnot(setequal(reference_ids_in_joint_order, reference_selection$IID))
+
+# Resolve the historical false-positive prefix mismatch by a validated key,
+# not by fixed row positions.
+canonical_sample_key <- function(x) sub("^NBSfalsepos_", "", as.character(x))
+phenotype_ids <- as.character(phenotype[["NBS-sample-ID"]])
+stopifnot(!anyDuplicated(canonical_sample_key(phenotype_ids)))
+
+study_ids_raw <- as.character(fam$V2[!is_reference])
+study_match <- match(study_ids_raw, phenotype_ids)
+unmatched <- is.na(study_match)
+study_match[unmatched] <- match(
+  canonical_sample_key(study_ids_raw[unmatched]),
+  canonical_sample_key(phenotype_ids)
+)
+stopifnot(!anyNA(study_match), !anyDuplicated(study_match), length(study_match) == 378L)
+cohort_raw <- phenotype[study_match, , drop = FALSE]
+
+# Dataset-specific column mappings, validated below against known 1000G
+# superpopulations. The supervised joint Q and unsupervised selection Q have
+# different raw component orders.
+joint_component_order <- c("AMR", "AFR", "EUR", "SAS", "EAS")
+reference_q_component_order <- c("EUR", "AMR", "SAS", "AFR", "EAS")
+
+joint_q <- as.data.frame(joint_q_raw)
+names(joint_q) <- joint_component_order
+reference_q <- as.data.frame(reference_q_raw)
+names(reference_q) <- reference_q_component_order
+
+stopifnot(
+  max(abs(rowSums(joint_q) - 1)) < 1e-3,
+  max(abs(rowSums(reference_q) - 1)) < 1e-3
+)
+
+reference_superpop <- reference_selection$SuperPop[
+  match(reference_ids_in_joint_order, reference_selection$IID)
+]
+joint_reference_validation <- joint_q[is_reference, , drop = FALSE] %>%
+  mutate(SuperPop = reference_superpop) %>%
+  group_by(SuperPop) %>%
+  summarise(across(all_of(joint_component_order), mean), .groups = "drop")
+
+reference_q_validation <- reference_q %>%
+  mutate(
+    IID = reference_metadata[["#IID"]],
+    SuperPop = reference_metadata$SuperPop
+  ) %>%
+  filter(IID %in% reference_selection$IID) %>%
+  group_by(SuperPop) %>%
+  summarise(across(all_of(joint_component_order), mean), .groups = "drop")
+
+validate_component_mapping <- function(summary_table, ancestry_columns) {
+  observed <- ancestry_columns[
+    max.col(as.matrix(summary_table[, ancestry_columns, drop = FALSE]))
+  ]
+  if (!identical(as.character(summary_table$SuperPop), observed)) {
+    stop(
+      "Ancestry component mapping failed validation. Expected superpopulation ",
+      "to be the largest mean component in its reference group."
+    )
+  }
+}
+validate_component_mapping(joint_reference_validation, joint_component_order)
+validate_component_mapping(reference_q_validation, joint_component_order)
+
+component_mapping <- bind_rows(
+  data.frame(
+    source_file = basename(input_files[["joint_q"]]),
+    raw_column = paste0("V", seq_along(joint_component_order)),
+    ancestry_component = joint_component_order
+  ),
+  data.frame(
+    source_file = basename(input_files[["reference_selection_q"]]),
+    raw_column = paste0("V", seq_along(reference_q_component_order)),
+    ancestry_component = reference_q_component_order
+  )
+)
+write.csv(
+  component_mapping,
+  file.path(table_dir, "ancestry_component_mapping.csv"),
+  row.names = FALSE
+)
+write.csv(
+  joint_reference_validation,
+  file.path(table_dir, "joint_q_component_validation_means.csv"),
+  row.names = FALSE
+)
+write.csv(
+  reference_q_validation,
+  file.path(table_dir, "reference_q_component_validation_means.csv"),
+  row.names = FALSE
+)
+
+# The saved 2,158-person selection is exactly reproduced by max ancestry >0.80
+# in gwas_ld_pruned.5.Q. This resolves the 0.75/0.80 narrative conflict for
+# this descriptive release without claiming the missing upstream command log.
+selected_from_threshold <- reference_metadata[["#IID"]][
+  apply(reference_q, 1, max) > 0.80
+]
+stopifnot(
+  length(selected_from_threshold) == 2158L,
+  setequal(selected_from_threshold, reference_selection$IID)
+)
+
+reference_selection_audit <- data.frame(
+  source_file = basename(input_files[["reference_selection_q"]]),
+  criterion = "maximum ancestry proportion > 0.80",
+  total_1000g = nrow(reference_q),
+  selected_n = length(selected_from_threshold),
+  saved_selection_n = nrow(reference_selection),
+  exact_set_match = TRUE,
+  stringsAsFactors = FALSE
+)
+write.csv(
+  reference_selection_audit,
+  file.path(table_dir, "reference_selection_audit.csv"),
+  row.names = FALSE
+)
+
+# -----------------------------------------------------------------------------
+# Freeze the manuscript-v8 SRE hierarchy and construct descriptive variables
+# -----------------------------------------------------------------------------
+
+race_columns <- paste0("RACE_ETH_", 1:4)
+stopifnot(all(race_columns %in% names(cohort_raw)))
+
+eas_labels <- c("Japanese", "Chinese", "Laos", "Korean", "Vietnamese", "Filipino")
+sas_labels <- "Asian East Indian"
+
+clean_sre_values <- function(values) {
+  values <- trimws(as.character(values))
+  values <- values[!is.na(values) & nzchar(values)]
+  values[values %in% eas_labels] <- "EAS"
+  values[values %in% sas_labels] <- "SAS"
+  unique(values)
+}
+
+assign_sre_v8 <- function(values) {
+  values <- clean_sre_values(values)
+  if ("Hispanic" %in% values) return("Hispanic")
+  if ("Black" %in% values) return("Black")
+  if ("EAS" %in% values) return("EAS")
+  if ("SAS" %in% values) return("SAS")
+  if ("Middle Eastern" %in% values) return("Middle Eastern")
+  if ("Native American" %in% values) return("Native American")
+  if (identical(values, "White")) return("White")
+  "Other/Unknown"
+}
+
+assign_sre_legacy <- function(values) {
+  values <- clean_sre_values(values)
+  if ("Hispanic" %in% values) return("Hispanic")
+  if ("Native American" %in% values) return("Native American")
+  if ("Black" %in% values) return("Black")
+  if ("EAS" %in% values) return("EAS")
+  if ("SAS" %in% values) return("SAS")
+  if ("Middle Eastern" %in% values) return("Middle Eastern")
+  if (identical(values, "White")) return("White")
+  "Other/Unknown"
+}
+
+sre_levels <- c(
+  "Hispanic", "White", "Middle Eastern", "Black", "SAS", "EAS",
+  "Native American", "Other/Unknown"
+)
+ancestry_levels <- c("AMR", "AFR", "EUR", "SAS", "EAS")
+
+assigned_sre <- apply(cohort_raw[, race_columns, drop = FALSE], 1, assign_sre_v8)
+legacy_sre <- apply(cohort_raw[, race_columns, drop = FALSE], 1, assign_sre_legacy)
+reported_selection_count <- apply(
+  cohort_raw[, race_columns, drop = FALSE],
+  1,
+  function(values) {
+    values <- trimws(as.character(values))
+    sum(!is.na(values) & nzchar(values))
+  }
+)
+reporting_status <- ifelse(
+  reported_selection_count >= 2,
+  "Multiple",
+  "Single/no multiple report"
+)
+
+study_q <- joint_q[!is_reference, , drop = FALSE]
+majority_ga <- ancestry_levels[max.col(as.matrix(study_q), ties.method = "first")]
+majority_ga_proportion <- apply(study_q, 1, max)
+entropy_bits <- -rowSums(
+  ifelse(as.matrix(study_q) > 0, as.matrix(study_q) * log2(as.matrix(study_q)), 0)
+)
+
+cohort <- bind_cols(
+  data.frame(
+    assigned_sre = assigned_sre,
+    legacy_sre = legacy_sre,
+    reported_selection_count = reported_selection_count,
+    reporting_status = reporting_status,
+    majority_ga = majority_ga,
+    majority_ga_proportion = majority_ga_proportion,
+    entropy_bits = entropy_bits,
+    raw_group = as.character(cohort_raw[["Group (patient, controls, falsepos)"]]),
+    stringsAsFactors = FALSE
+  ),
+  study_q
+)
+cohort$outcome <- ifelse(cohort$raw_group == "patients", "True positive", "False positive")
+cohort$assigned_sre <- factor(cohort$assigned_sre, levels = sre_levels)
+cohort$legacy_sre <- factor(cohort$legacy_sre, levels = sre_levels)
+cohort$reporting_status <- factor(
+  cohort$reporting_status,
+  levels = c("Single/no multiple report", "Multiple")
+)
+cohort$majority_ga <- factor(cohort$majority_ga, levels = ancestry_levels)
+stopifnot(nrow(cohort) == 378L, sum(cohort$reporting_status == "Multiple") == 52L)
+
+sre_hierarchy_sensitivity <- full_join(
+  as.data.frame(table(cohort$assigned_sre), stringsAsFactors = FALSE) %>%
+    rename(sre = Var1, v8_methods_hierarchy_n = Freq),
+  as.data.frame(table(cohort$legacy_sre), stringsAsFactors = FALSE) %>%
+    rename(sre = Var1, legacy_native_before_eas_n = Freq),
+  by = "sre"
+) %>%
+  mutate(
+    difference = v8_methods_hierarchy_n - legacy_native_before_eas_n,
+    sre = factor(sre, levels = sre_levels)
+  ) %>%
+  arrange(sre)
+write.csv(
+  sre_hierarchy_sensitivity,
+  file.path(table_dir, "sre_hierarchy_sensitivity.csv"),
+  row.names = FALSE
+)
+
+# Cohort-count table: aggregate only; no sample identifiers.
+make_count_section <- function(section, values, levels = NULL) {
+  values <- if (is.null(levels)) values else factor(values, levels = levels)
+  counts <- as.data.frame(table(values), stringsAsFactors = FALSE)
+  names(counts) <- c("category", "n")
+  counts %>%
+    mutate(
+      section = section,
+      denominator = sum(n),
+      percent = n / denominator
+    ) %>%
+    select(section, category, n, denominator, percent)
+}
+
+cohort_counts <- bind_rows(
+  data.frame(
+    section = "Total cohort",
+    category = "All matched study participants",
+    n = nrow(cohort),
+    denominator = nrow(cohort),
+    percent = 1
+  ),
+  make_count_section("Outcome", cohort$outcome),
+  make_count_section("Raw cohort group", cohort$raw_group),
+  make_count_section("Assigned SRE (v8 hierarchy)", cohort$assigned_sre, sre_levels),
+  make_count_section(
+    "SRE reporting status",
+    cohort$reporting_status,
+    c("Single/no multiple report", "Multiple")
+  ),
+  make_count_section(
+    "Number of nonmissing SRE selections",
+    as.character(cohort$reported_selection_count),
+    as.character(0:3)
+  ),
+  make_count_section("Majority genetic ancestry", cohort$majority_ga, ancestry_levels)
+)
+write.csv(
+  cohort_counts,
+  file.path(table_dir, "cohort_counts.csv"),
+  row.names = FALSE
+)
+
+reference_counts <- reference_selection %>%
+  left_join(
+    reference_metadata %>%
+      transmute(IID = .data[["#IID"]], Population, metadata_superpop = SuperPop),
+    by = "IID"
+  )
+stopifnot(!anyNA(reference_counts$Population), all(reference_counts$SuperPop == reference_counts$metadata_superpop))
+reference_counts_table <- reference_counts %>%
+  count(SuperPop, Population, name = "n") %>%
+  group_by(SuperPop) %>%
+  mutate(superpopulation_total = sum(n)) %>%
+  ungroup()
+write.csv(
+  reference_counts_table,
+  file.path(table_dir, "reference_population_counts.csv"),
+  row.names = FALSE
+)
+
+# -----------------------------------------------------------------------------
+# Figure 2 source table and agreement analysis
+# -----------------------------------------------------------------------------
+
+cross_source <- cohort %>%
+  count(assigned_sre, majority_ga, .drop = FALSE, name = "n") %>%
+  group_by(assigned_sre) %>%
+  mutate(row_total = sum(n), row_proportion = n / row_total) %>%
+  ungroup() %>%
+  group_by(majority_ga) %>%
+  mutate(column_total = sum(n), column_proportion = n / column_total) %>%
+  ungroup() %>%
+  mutate(
+    assigned_sre = factor(assigned_sre, levels = sre_levels),
+    majority_ga = factor(majority_ga, levels = ancestry_levels)
+  ) %>%
+  arrange(assigned_sre, majority_ga)
+write.csv(
+  cross_source,
+  file.path(table_dir, "figure2_sre_majority_ga_source.csv"),
+  row.names = FALSE
+)
+
+cohen_kappa <- function(a, b, levels) {
+  tab <- table(factor(a, levels = levels), factor(b, levels = levels))
+  total <- sum(tab)
+  observed <- sum(diag(tab)) / total
+  expected <- sum(rowSums(tab) * colSums(tab)) / total^2
+  kappa <- if (expected < 1) (observed - expected) / (1 - expected) else NA_real_
+  list(kappa = kappa, observed = observed, expected = expected, table = tab)
+}
+
+sre_to_ga <- c(Hispanic = "AMR", White = "EUR", Black = "AFR", SAS = "SAS", EAS = "EAS")
+kappa_keep <- as.character(cohort$assigned_sre) %in% names(sre_to_ga)
+kappa_sre <- unname(sre_to_ga[as.character(cohort$assigned_sre[kappa_keep])])
+kappa_ga <- as.character(cohort$majority_ga[kappa_keep])
+kappa_result <- cohen_kappa(kappa_sre, kappa_ga, ancestry_levels)
+
+set.seed(seed + 1L)
+kappa_boot <- replicate(bootstrap_replicates, {
+  index <- sample.int(length(kappa_sre), length(kappa_sre), replace = TRUE)
+  cohen_kappa(kappa_sre[index], kappa_ga[index], ancestry_levels)$kappa
+})
+kappa_boot <- kappa_boot[is.finite(kappa_boot)]
+kappa_ci <- unname(quantile(kappa_boot, c(0.025, 0.975), names = FALSE))
+
+kappa_summary <- data.frame(
+  analysis = "Five-category overall Cohen kappa",
+  included_sre = "Hispanic/AMR; Black/AFR; White/EUR; SAS/SAS; EAS/EAS",
+  excluded_sre = "Middle Eastern; Native American; Other/Unknown",
+  n = length(kappa_sre),
+  estimate = kappa_result$kappa,
+  bootstrap_ci_low = kappa_ci[1],
+  bootstrap_ci_high = kappa_ci[2],
+  observed_agreement = kappa_result$observed,
+  chance_expected_agreement = kappa_result$expected,
+  bootstrap_replicates = bootstrap_replicates,
+  seed = seed + 1L,
+  stringsAsFactors = FALSE
+)
+write.csv(
+  kappa_summary,
+  file.path(table_dir, "cohen_kappa_overall_bootstrap.csv"),
+  row.names = FALSE
+)
+
+kappa_confusion <- as.data.frame.matrix(kappa_result$table)
+kappa_confusion <- cbind(SRE_mapped_component = rownames(kappa_confusion), kappa_confusion)
+rownames(kappa_confusion) <- NULL
+write.csv(
+  kappa_confusion,
+  file.path(table_dir, "cohen_kappa_five_category_confusion_matrix.csv"),
+  row.names = FALSE
+)
+
+# -----------------------------------------------------------------------------
+# Figure 3 source tables and entropy inference
+# -----------------------------------------------------------------------------
+
+entropy_source <- cohort %>%
+  transmute(
+    anonymous_plot_index = row_number(),
+    assigned_sre,
+    reporting_status,
+    entropy_bits
+  )
+write.csv(
+  entropy_source,
+  file.path(table_dir, "figure3_entropy_source_restricted_internal.csv"),
+  row.names = FALSE
+)
+
+entropy_summary <- cohort %>%
+  group_by(assigned_sre, reporting_status, .drop = FALSE) %>%
+  summarise(
+    n = n(),
+    mean_entropy_bits = ifelse(n() > 0, mean(entropy_bits), NA_real_),
+    sd_entropy_bits = ifelse(n() > 1, sd(entropy_bits), NA_real_),
+    median_entropy_bits = ifelse(n() > 0, median(entropy_bits), NA_real_),
+    iqr_entropy_bits = ifelse(n() > 0, IQR(entropy_bits), NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(n > 0)
+write.csv(
+  entropy_summary,
+  file.path(table_dir, "figure3_entropy_summary.csv"),
+  row.names = FALSE
+)
+
+cliffs_delta <- function(x, y) {
+  nx <- length(x)
+  ny <- length(y)
+  ranks <- rank(c(x, y), ties.method = "average")
+  u <- sum(ranks[seq_len(nx)]) - nx * (nx + 1) / 2
+  2 * u / (nx * ny) - 1
+}
+
+entropy_single <- cohort$entropy_bits[
+  cohort$reporting_status == "Single/no multiple report"
+]
+entropy_multiple <- cohort$entropy_bits[cohort$reporting_status == "Multiple"]
+entropy_mean_difference <- mean(entropy_multiple) - mean(entropy_single)
+entropy_cliffs_delta <- cliffs_delta(entropy_multiple, entropy_single)
+
+set.seed(seed + 2L)
+entropy_boot <- replicate(bootstrap_replicates, {
+  boot_multiple <- sample(entropy_multiple, length(entropy_multiple), replace = TRUE)
+  boot_single <- sample(entropy_single, length(entropy_single), replace = TRUE)
+  c(
+    mean_difference = mean(boot_multiple) - mean(boot_single),
+    cliffs_delta = cliffs_delta(boot_multiple, boot_single)
+  )
+})
+entropy_mean_ci <- unname(quantile(entropy_boot["mean_difference", ], c(0.025, 0.975)))
+entropy_delta_ci <- unname(quantile(entropy_boot["cliffs_delta", ], c(0.025, 0.975)))
+entropy_wilcox <- wilcox.test(
+  entropy_multiple,
+  entropy_single,
+  alternative = "two.sided",
+  exact = FALSE
+)
+
+entropy_overall_comparison <- data.frame(
+  single_status_label = "Single/no multiple report",
+  single_n = length(entropy_single),
+  single_mean_bits = mean(entropy_single),
+  single_sd_bits = sd(entropy_single),
+  multiple_n = length(entropy_multiple),
+  multiple_mean_bits = mean(entropy_multiple),
+  multiple_sd_bits = sd(entropy_multiple),
+  mean_difference_multiple_minus_single_bits = entropy_mean_difference,
+  mean_difference_bootstrap_ci_low = entropy_mean_ci[1],
+  mean_difference_bootstrap_ci_high = entropy_mean_ci[2],
+  cliffs_delta = entropy_cliffs_delta,
+  cliffs_delta_bootstrap_ci_low = entropy_delta_ci[1],
+  cliffs_delta_bootstrap_ci_high = entropy_delta_ci[2],
+  wilcoxon_w = unname(entropy_wilcox$statistic),
+  wilcoxon_p = entropy_wilcox$p.value,
+  bootstrap_replicates = bootstrap_replicates,
+  seed = seed + 2L,
+  stringsAsFactors = FALSE
+)
+write.csv(
+  entropy_overall_comparison,
+  file.path(table_dir, "entropy_overall_single_vs_multiple_bootstrap.csv"),
+  row.names = FALSE
+)
+
+entropy_sre_tests <- lapply(sre_levels, function(sre_name) {
+  group_data <- cohort %>% filter(assigned_sre == sre_name)
+  x <- group_data$entropy_bits[group_data$reporting_status == "Multiple"]
+  y <- group_data$entropy_bits[
+    group_data$reporting_status == "Single/no multiple report"
+  ]
+  data.frame(
+    assigned_sre = sre_name,
+    multiple_n = length(x),
+    single_n = length(y),
+    mean_difference_multiple_minus_single_bits = if (
+      length(x) > 0 && length(y) > 0
+    ) mean(x) - mean(y) else NA_real_,
+    wilcoxon_p = if (length(x) >= 2 && length(y) >= 2) {
+      wilcox.test(x, y, exact = FALSE)$p.value
+    } else {
+      NA_real_
+    }
+  )
+}) %>% bind_rows() %>%
+  mutate(wilcoxon_bh_adjusted_p = p.adjust(wilcoxon_p, method = "BH"))
+write.csv(
+  entropy_sre_tests,
+  file.path(table_dir, "entropy_by_sre_single_vs_multiple_tests.csv"),
+  row.names = FALSE
+)
+
+# -----------------------------------------------------------------------------
+# Plot styling and palettes
+# -----------------------------------------------------------------------------
+
+ancestry_palette <- c(
+  AMR = "#E69F00", # orange
+  AFR = "#D55E00", # vermillion
+  EUR = "#0072B2", # blue
+  SAS = "#009E73", # bluish green
+  EAS = "#CC79A7"  # reddish purple
+)
+sre_palette <- c(
+  Hispanic = ancestry_palette[["AMR"]],
+  White = ancestry_palette[["EUR"]],
+  `Middle Eastern` = "#56B4E9",
+  Black = ancestry_palette[["AFR"]],
+  SAS = ancestry_palette[["SAS"]],
+  EAS = ancestry_palette[["EAS"]],
+  `Native American` = "#F0E442",
+  `Other/Unknown` = "#8C8C8C"
+)
+status_palette <- c(
+  `Single/no multiple report` = "#0072B2",
+  Multiple = "#D55E00"
+)
+
+theme_journal <- function(base_size = 10) {
+  theme_classic(base_size = base_size, base_family = "sans") +
+    theme(
+      plot.title = element_text(face = "bold", size = rel(1.05), hjust = 0),
+      plot.subtitle = element_text(color = "grey30", size = rel(0.9), hjust = 0),
+      axis.title = element_text(face = "plain"),
+      axis.text = element_text(color = "black"),
+      legend.title = element_text(face = "bold"),
+      legend.key.height = grid::unit(0.42, "cm"),
+      plot.margin = margin(8, 10, 8, 8)
+    )
+}
+
+save_figure <- function(plot, stem, width, height) {
+  pdf_path <- file.path(figure_dir, paste0(stem, ".pdf"))
+  png_path <- file.path(figure_dir, paste0(stem, ".png"))
+  ggsave(
+    pdf_path,
+    plot = plot,
+    width = width,
+    height = height,
+    units = "in",
+    device = grDevices::cairo_pdf,
+    bg = "white"
+  )
+  ggsave(
+    png_path,
+    plot = plot,
+    width = width,
+    height = height,
+    units = "in",
+    dpi = 300,
+    device = ragg::agg_png,
+    bg = "white"
+  )
+  c(pdf = pdf_path, png = png_path)
+}
+
+group_boundaries <- function(data, group_column) {
+  data %>%
+    group_by(.data[[group_column]]) %>%
+    summarise(
+      start = min(plot_index),
+      end = max(plot_index),
+      center = (start + end) / 2,
+      .groups = "drop"
+    )
+}
+
+# -----------------------------------------------------------------------------
+# Figure 1: 1000G reference and 378-cohort ADMIXTURE panels
+# -----------------------------------------------------------------------------
+
+population_order <- c(
+  "PEL", "MXL", "CLM", "PUR",
+  "GWD", "MSL", "YRI", "ESN", "LWK", "ASW", "ACB",
+  "FIN", "CEU", "GBR", "IBS", "TSI",
+  "PJL", "GIH", "STU", "ITU", "BEB",
+  "KHV", "CDX", "CHS", "CHB", "JPT"
+)
+
+reference_plot <- bind_cols(
+  reference_metadata %>%
+    transmute(IID = .data[["#IID"]], SuperPop, Population),
+  reference_q
+) %>%
+  filter(IID %in% reference_selection$IID) %>%
+  mutate(
+    SuperPop = factor(SuperPop, levels = ancestry_levels),
+    Population = factor(Population, levels = population_order),
+    expected_component = as.character(SuperPop),
+    expected_proportion = case_when(
+      expected_component == "AMR" ~ AMR,
+      expected_component == "AFR" ~ AFR,
+      expected_component == "EUR" ~ EUR,
+      expected_component == "SAS" ~ SAS,
+      expected_component == "EAS" ~ EAS
+    )
+  ) %>%
+  arrange(Population, desc(expected_proportion), desc(EUR), desc(AMR), desc(SAS), desc(AFR), desc(EAS)) %>%
+  mutate(plot_index = row_number())
+stopifnot(nrow(reference_plot) == 2158L)
+
+reference_plot_source <- reference_plot %>%
+  transmute(
+    anonymous_plot_index = plot_index,
+    SuperPop,
+    Population,
+    AMR,
+    AFR,
+    EUR,
+    SAS,
+    EAS
+  )
+write.csv(
+  reference_plot_source,
+  file.path(table_dir, "figure1_reference_admixture_source_restricted_internal.csv"),
+  row.names = FALSE
+)
+
+expected_component_for_sre <- c(
+  Hispanic = "AMR", White = "EUR", Black = "AFR", SAS = "SAS", EAS = "EAS",
+  `Native American` = "AMR"
+)
+cohort_plot <- cohort %>%
+  mutate(
+    assigned_sre = factor(assigned_sre, levels = sre_levels),
+    expected_component = unname(expected_component_for_sre[as.character(assigned_sre)]),
+    expected_proportion = case_when(
+      expected_component == "AMR" ~ AMR,
+      expected_component == "AFR" ~ AFR,
+      expected_component == "EUR" ~ EUR,
+      expected_component == "SAS" ~ SAS,
+      expected_component == "EAS" ~ EAS,
+      TRUE ~ majority_ga_proportion
+    )
+  ) %>%
+  arrange(assigned_sre, majority_ga, desc(expected_proportion), desc(majority_ga_proportion)) %>%
+  mutate(plot_index = row_number())
+
+cohort_plot_source <- cohort_plot %>%
+  transmute(
+    anonymous_plot_index = plot_index,
+    assigned_sre,
+    reporting_status,
+    majority_ga,
+    majority_ga_proportion,
+    AMR,
+    AFR,
+    EUR,
+    SAS,
+    EAS
+  )
+write.csv(
+  cohort_plot_source,
+  file.path(table_dir, "figure1_cohort_admixture_source_restricted_internal.csv"),
+  row.names = FALSE
+)
+
+reference_long <- reference_plot %>%
+  select(plot_index, SuperPop, Population, all_of(ancestry_levels)) %>%
+  pivot_longer(all_of(ancestry_levels), names_to = "ancestry", values_to = "proportion") %>%
+  mutate(ancestry = factor(ancestry, levels = ancestry_levels))
+cohort_long <- cohort_plot %>%
+  select(plot_index, assigned_sre, all_of(ancestry_levels)) %>%
+  pivot_longer(all_of(ancestry_levels), names_to = "ancestry", values_to = "proportion") %>%
+  mutate(ancestry = factor(ancestry, levels = ancestry_levels))
+
+reference_groups <- group_boundaries(reference_plot, "Population")
+cohort_groups <- group_boundaries(cohort_plot, "assigned_sre")
+
+figure1a <- ggplot(reference_long, aes(plot_index, proportion, fill = ancestry)) +
+  geom_col(width = 1, linewidth = 0) +
+  geom_vline(
+    data = reference_groups[-nrow(reference_groups), , drop = FALSE],
+    aes(xintercept = end + 0.5),
+    color = "white",
+    linewidth = 0.25
+  ) +
+  scale_fill_manual(values = ancestry_palette, breaks = ancestry_levels, drop = FALSE) +
+  scale_x_continuous(
+    breaks = reference_groups$center,
+    labels = as.character(reference_groups$Population),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 1, 0.25),
+    labels = label_percent(accuracy = 1),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  coord_cartesian(ylim = c(0, 1), expand = FALSE) +
+  labs(
+    title = "A  1000 Genomes homogeneous references (n = 2,158)",
+    subtitle = "Selected by maximum unsupervised K=5 ancestry proportion >0.80",
+    x = NULL,
+    y = "Ancestry proportion",
+    fill = "Ancestry component"
+  ) +
+  theme_journal(9) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 7),
+    legend.position = "bottom"
+  )
+
+figure1b <- ggplot(cohort_long, aes(plot_index, proportion, fill = ancestry)) +
+  geom_col(width = 1, linewidth = 0) +
+  geom_vline(
+    data = cohort_groups[-nrow(cohort_groups), , drop = FALSE],
+    aes(xintercept = end + 0.5),
+    color = "white",
+    linewidth = 0.35
+  ) +
+  scale_fill_manual(values = ancestry_palette, breaks = ancestry_levels, drop = FALSE) +
+  scale_x_continuous(
+    breaks = cohort_groups$center,
+    labels = as.character(cohort_groups$assigned_sre),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 1, 0.25),
+    labels = label_percent(accuracy = 1),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  coord_cartesian(ylim = c(0, 1), expand = FALSE) +
+  labs(
+    title = "B  Screen-positive newborn cohort (n = 378)",
+    subtitle = "Supervised K=5 estimates grouped by the manuscript-v8 SRE hierarchy",
+    x = "Assigned self-reported ethnicity (SRE)",
+    y = "Ancestry proportion",
+    fill = "Ancestry component"
+  ) +
+  theme_journal(9) +
+  theme(
+    axis.text.x = element_text(angle = 25, hjust = 1, vjust = 1, size = 8),
+    legend.position = "bottom"
+  )
+
+figure1 <- (figure1a / figure1b) +
+  plot_layout(heights = c(1.05, 1), guides = "collect") &
+  theme(legend.position = "bottom")
+figure1_paths <- save_figure(
+  figure1,
+  "Figure1_ADMIXTURE_reference_and_cohort_v8",
+  width = 12,
+  height = 7.4
+)
+
+# -----------------------------------------------------------------------------
+# Figure 2: SRE x majority-GA counts and conditional proportions
+# -----------------------------------------------------------------------------
+
+figure2_heat <- cross_source %>%
+  mutate(
+    label = ifelse(n == 0, "", sprintf("%d\n%s", n, percent(row_proportion, accuracy = 1))),
+    text_color = ifelse(n >= 40, "white", "black"),
+    assigned_sre_plot = factor(assigned_sre, levels = rev(sre_levels))
+  )
+
+figure2a <- ggplot(
+  figure2_heat,
+  aes(majority_ga, assigned_sre_plot, fill = n)
+) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = label, color = text_color), size = 3.1, lineheight = 0.9) +
+  scale_color_identity() +
+  scale_fill_gradient(low = "#F7FBFF", high = "#0072B2", name = "Count") +
+  labs(
+    title = "A  Exact cross-classification",
+    subtitle = "Cell labels show count and row percentage",
+    x = "Majority genetic ancestry",
+    y = "Assigned SRE"
+  ) +
+  coord_fixed(ratio = 0.65) +
+  theme_journal(9) +
+  theme(panel.border = element_rect(color = "grey35", fill = NA, linewidth = 0.5))
+
+figure2b <- ggplot(
+  cross_source,
+  aes(assigned_sre, row_proportion, fill = majority_ga)
+) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.2) +
+  scale_fill_manual(values = ancestry_palette, breaks = ancestry_levels, drop = FALSE) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = label_percent(accuracy = 1),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  labs(
+    title = "B  Majority GA within SRE",
+    x = "Assigned SRE",
+    y = "Within-SRE proportion",
+    fill = "Majority GA"
+  ) +
+  theme_journal(9) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1), legend.position = "bottom")
+
+figure2c <- ggplot(
+  cross_source,
+  aes(majority_ga, column_proportion, fill = assigned_sre)
+) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.2) +
+  scale_fill_manual(values = sre_palette, breaks = sre_levels, drop = FALSE) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = label_percent(accuracy = 1),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  labs(
+    title = "C  SRE within majority GA",
+    x = "Majority genetic ancestry",
+    y = "Within-GA proportion",
+    fill = "Assigned SRE"
+  ) +
+  theme_journal(9) +
+  theme(legend.position = "bottom")
+
+figure2 <- figure2a / (figure2b | figure2c) +
+  plot_layout(heights = c(1.15, 1))
+figure2_paths <- save_figure(
+  figure2,
+  "Figure2_SRE_majority_GA_concordance_v8",
+  width = 12,
+  height = 9.2
+)
+
+# -----------------------------------------------------------------------------
+# Figure 3: entropy by SRE and reporting status
+# -----------------------------------------------------------------------------
+
+format_p <- function(p) {
+  if (is.na(p)) return("NA")
+  if (p < 0.001) format(p, scientific = TRUE, digits = 2) else sprintf("%.3f", p)
+}
+
+figure3a <- ggplot(
+  cohort,
+  aes(assigned_sre, entropy_bits, color = reporting_status, fill = reporting_status)
+) +
+  geom_boxplot(
+    width = 0.62,
+    position = position_dodge(width = 0.72),
+    outlier.shape = NA,
+    alpha = 0.15,
+    linewidth = 0.55
+  ) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.18, dodge.width = 0.72),
+    alpha = 0.55,
+    size = 1.05,
+    stroke = 0
+  ) +
+  scale_color_manual(values = status_palette, drop = FALSE) +
+  scale_fill_manual(values = status_palette, drop = FALSE) +
+  scale_y_continuous(
+    breaks = seq(0, 2, 0.5),
+    expand = expansion(mult = c(0, 0.03))
+  ) +
+  coord_cartesian(ylim = c(0, log2(5))) +
+  labs(
+    title = "A  Admixture entropy by assigned SRE",
+    subtitle = "Entropy is calculated in bits across the five ADMIXTURE proportions",
+    x = "Assigned SRE",
+    y = "Shannon entropy (bits)",
+    color = "SRE reporting status",
+    fill = "SRE reporting status"
+  ) +
+  theme_journal(9) +
+  theme(
+    axis.text.x = element_text(angle = 35, hjust = 1),
+    legend.position = "bottom"
+  )
+
+entropy_annotation <- sprintf(
+  "Mean difference = %.3f bits\nbootstrap 95%% CI %.3f to %.3f\nCliff's delta = %.3f (95%% CI %.3f to %.3f)\nWilcoxon p = %s",
+  entropy_mean_difference,
+  entropy_mean_ci[1],
+  entropy_mean_ci[2],
+  entropy_cliffs_delta,
+  entropy_delta_ci[1],
+  entropy_delta_ci[2],
+  format_p(entropy_wilcox$p.value)
+)
+
+figure3b <- ggplot(
+  cohort,
+  aes(reporting_status, entropy_bits, fill = reporting_status, color = reporting_status)
+) +
+  geom_violin(width = 0.78, alpha = 0.15, linewidth = 0.55, trim = FALSE) +
+  geom_boxplot(width = 0.23, outlier.shape = NA, alpha = 0.35, linewidth = 0.55) +
+  geom_jitter(width = 0.09, alpha = 0.42, size = 1.05, stroke = 0) +
+  annotate(
+    "label",
+    x = 1.5,
+    y = 2.18,
+    label = entropy_annotation,
+    hjust = 0.5,
+    vjust = 1,
+    size = 3.0,
+    label.size = 0.25,
+    fill = "white"
+  ) +
+  scale_fill_manual(values = status_palette, drop = FALSE) +
+  scale_color_manual(values = status_palette, drop = FALSE) +
+  scale_y_continuous(
+    breaks = seq(0, 2, 0.5),
+    expand = expansion(mult = c(0, 0.03))
+  ) +
+  coord_cartesian(ylim = c(0, log2(5))) +
+  scale_x_discrete(labels = c("Single/no\nmultiple report", "Multiple")) +
+  labs(
+    title = "B  Overall single-vs-multiple comparison",
+    x = NULL,
+    y = "Shannon entropy (bits)"
+  ) +
+  theme_journal(9) +
+  theme(legend.position = "none")
+
+figure3 <- figure3a | figure3b
+figure3_paths <- save_figure(
+  figure3,
+  "Figure3_entropy_by_SRE_and_reporting_status_v8",
+  width = 12,
+  height = 5.9
+)
+
+# -----------------------------------------------------------------------------
+# Figure 4: multi-SRE ADMIXTURE profiles plus reported-selection matrix
+# -----------------------------------------------------------------------------
+
+harmonize_reported_category <- function(value) {
+  if (is.na(value) || !nzchar(trimws(as.character(value)))) return(NA_character_)
+  value <- trimws(as.character(value))
+  if (value %in% eas_labels) return("EAS")
+  if (value %in% sas_labels) return("SAS")
+  if (value %in% c("Hispanic", "White", "Black", "Middle Eastern", "Native American")) {
+    return(value)
+  }
+  "Other/Unknown"
+}
+
+multi_indices <- which(cohort$reporting_status == "Multiple")
+multi_plot <- cohort[multi_indices, , drop = FALSE]
+multi_raw_race <- cohort_raw[multi_indices, race_columns, drop = FALSE]
+multi_combinations <- apply(multi_raw_race, 1, function(values) {
+  categories <- unique(na.omit(vapply(values, harmonize_reported_category, character(1))))
+  paste(categories, collapse = " + ")
+})
+multi_plot$reported_sre_combination <- multi_combinations
+multi_plot <- multi_plot %>%
+  mutate(
+    assigned_sre = factor(assigned_sre, levels = sre_levels),
+    expected_component = unname(expected_component_for_sre[as.character(assigned_sre)]),
+    expected_proportion = case_when(
+      expected_component == "AMR" ~ AMR,
+      expected_component == "AFR" ~ AFR,
+      expected_component == "EUR" ~ EUR,
+      expected_component == "SAS" ~ SAS,
+      expected_component == "EAS" ~ EAS,
+      TRUE ~ majority_ga_proportion
+    )
+  ) %>%
+  arrange(assigned_sre, reported_sre_combination, majority_ga, desc(expected_proportion)) %>%
+  mutate(plot_index = row_number())
+stopifnot(nrow(multi_plot) == 52L)
+
+write.csv(
+  multi_plot %>%
+    transmute(
+      anonymous_plot_index = plot_index,
+      assigned_sre,
+      reported_sre_combination,
+      majority_ga,
+      majority_ga_proportion,
+      AMR,
+      AFR,
+      EUR,
+      SAS,
+      EAS
+    ),
+  file.path(table_dir, "figure4_multisre_admixture_source_restricted_internal.csv"),
+  row.names = FALSE
+)
+
+multi_raw_categories <- lapply(seq_len(nrow(multi_raw_race)), function(i) {
+  unique(na.omit(vapply(multi_raw_race[i, ], harmonize_reported_category, character(1))))
+})
+original_multi_order <- multi_indices
+plot_order_to_original <- original_multi_order[match(
+  multi_plot$reported_sre_combination,
+  multi_combinations
+)]
+
+# The match above is ambiguous for repeated combinations. Build the tile source
+# before sorting with a temporary row key, then drop the key from saved output.
+multi_with_key <- cohort[multi_indices, , drop = FALSE]
+multi_with_key$temp_row_key <- seq_len(nrow(multi_with_key))
+multi_with_key$reported_sre_combination <- multi_combinations
+multi_with_key <- multi_with_key %>%
+  mutate(
+    assigned_sre = factor(assigned_sre, levels = sre_levels),
+    expected_component = unname(expected_component_for_sre[as.character(assigned_sre)]),
+    expected_proportion = case_when(
+      expected_component == "AMR" ~ AMR,
+      expected_component == "AFR" ~ AFR,
+      expected_component == "EUR" ~ EUR,
+      expected_component == "SAS" ~ SAS,
+      expected_component == "EAS" ~ EAS,
+      TRUE ~ majority_ga_proportion
+    )
+  ) %>%
+  arrange(assigned_sre, reported_sre_combination, majority_ga, desc(expected_proportion), temp_row_key) %>%
+  mutate(plot_index = row_number())
+stopifnot(
+  identical(
+    as.character(multi_plot$reported_sre_combination),
+    as.character(multi_with_key$reported_sre_combination)
+  )
+)
+
+selection_tile_source <- expand_grid(
+  plot_index = multi_with_key$plot_index,
+  reported_category = sre_levels
+) %>%
+  left_join(
+    multi_with_key %>% select(plot_index, temp_row_key),
+    by = "plot_index"
+  ) %>%
+  rowwise() %>%
+  mutate(present = reported_category %in% multi_raw_categories[[temp_row_key]]) %>%
+  ungroup() %>%
+  mutate(
+    reported_category = factor(reported_category, levels = rev(sre_levels)),
+    tile_fill = ifelse(
+      present,
+      sre_palette[as.character(reported_category)],
+      "#F1F1F1"
+    )
+  )
+
+write.csv(
+  selection_tile_source %>%
+    transmute(
+      anonymous_plot_index = plot_index,
+      reported_category,
+      present
+    ),
+  file.path(table_dir, "figure4_multisre_selection_tiles_source_restricted_internal.csv"),
+  row.names = FALSE
+)
+
+multi_long <- multi_with_key %>%
+  select(plot_index, assigned_sre, all_of(ancestry_levels)) %>%
+  pivot_longer(all_of(ancestry_levels), names_to = "ancestry", values_to = "proportion") %>%
+  mutate(ancestry = factor(ancestry, levels = ancestry_levels))
+multi_groups <- group_boundaries(multi_with_key, "assigned_sre")
+
+figure4a <- ggplot(multi_long, aes(plot_index, proportion, fill = ancestry)) +
+  geom_col(width = 1, linewidth = 0) +
+  geom_vline(
+    data = multi_groups[-nrow(multi_groups), , drop = FALSE],
+    aes(xintercept = end + 0.5),
+    color = "white",
+    linewidth = 0.5
+  ) +
+  scale_fill_manual(values = ancestry_palette, breaks = ancestry_levels, drop = FALSE) +
+  scale_x_continuous(
+    breaks = multi_groups$center,
+    labels = as.character(multi_groups$assigned_sre),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 1, 0.25),
+    labels = label_percent(accuracy = 1),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  coord_cartesian(ylim = c(0, 1), expand = FALSE) +
+  labs(
+    title = "A  Genetic ancestry profiles among participants with multiple SRE selections (n = 52)",
+    x = "Assigned SRE (v8 hierarchy)",
+    y = "Ancestry proportion",
+    fill = "Ancestry component"
+  ) +
+  theme_journal(9) +
+  theme(
+    axis.text.x = element_text(angle = 25, hjust = 1),
+    legend.position = "bottom"
+  )
+
+figure4b <- ggplot(
+  selection_tile_source,
+  aes(plot_index, reported_category, fill = tile_fill)
+) +
+  geom_tile(color = "white", linewidth = 0.25) +
+  geom_vline(
+    data = multi_groups[-nrow(multi_groups), , drop = FALSE],
+    aes(xintercept = end + 0.5),
+    color = "grey35",
+    linewidth = 0.35
+  ) +
+  scale_fill_identity() +
+  scale_x_continuous(
+    limits = c(0.5, nrow(multi_with_key) + 0.5),
+    expand = expansion(mult = c(0, 0)),
+    breaks = NULL
+  ) +
+  labs(
+    title = "B  Harmonized reported SRE selections in the same anonymous order",
+    x = NULL,
+    y = "Reported selection"
+  ) +
+  theme_journal(9) +
+  theme(
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    panel.border = element_rect(color = "grey60", fill = NA, linewidth = 0.4)
+  )
+
+figure4 <- figure4a / figure4b + plot_layout(heights = c(2.8, 1.55))
+figure4_paths <- save_figure(
+  figure4,
+  "Figure4_multiple_SRE_ancestry_profiles_v8",
+  width = 12,
+  height = 7.8
+)
+
+# -----------------------------------------------------------------------------
+# Figure/source manifest, session record, and concise analysis report
+# -----------------------------------------------------------------------------
+
+figure_manifest <- data.frame(
+  figure = paste0("Figure ", 1:4),
+  pdf = basename(c(
+    figure1_paths[["pdf"]], figure2_paths[["pdf"]],
+    figure3_paths[["pdf"]], figure4_paths[["pdf"]]
+  )),
+  png_300dpi = basename(c(
+    figure1_paths[["png"]], figure2_paths[["png"]],
+    figure3_paths[["png"]], figure4_paths[["png"]]
+  )),
+  primary_source_tables = c(
+    "figure1_reference_admixture_source_restricted_internal.csv; figure1_cohort_admixture_source_restricted_internal.csv",
+    "figure2_sre_majority_ga_source.csv",
+    "figure3_entropy_source_restricted_internal.csv; figure3_entropy_summary.csv; entropy_overall_single_vs_multiple_bootstrap.csv",
+    "figure4_multisre_admixture_source_restricted_internal.csv; figure4_multisre_selection_tiles_source_restricted_internal.csv"
+  ),
+  release_note = c(
+    "Individual-level ancestry profiles are deidentified but remain restricted pending governance review.",
+    "Aggregate table; suitable for manuscript cross-checking.",
+    "Summary tables are aggregate; individual entropy source is restricted internal.",
+    "Individual-level ancestry profiles are deidentified but remain restricted pending governance review."
+  ),
+  stringsAsFactors = FALSE
+)
+write.csv(
+  figure_manifest,
+  file.path(table_dir, "figure_source_manifest.csv"),
+  row.names = FALSE
+)
+
+capture.output(sessionInfo(), file = file.path(analysis_dir, "sessionInfo.txt"))
+
+count_value <- function(section, category) {
+  cohort_counts$n[
+    cohort_counts$section == section & cohort_counts$category == category
+  ][1]
+}
+
+report_lines <- c(
+  "# Descriptive analysis report: manuscript v8 Figures 1-4",
+  "",
+  sprintf("Run date: %s", format(Sys.Date(), "%Y-%m-%d")),
+  sprintf("Reproducibility seed: %d; bootstrap replicates: %s", seed, comma(bootstrap_replicates)),
+  "",
+  "## Methods",
+  "",
+  paste0(
+    "The 378 study participants were joined to the phenotype workbook by validated sample keys. ",
+    "The saved 2,158-person 1000 Genomes reference set was identified by ID rather than row position. ",
+    "The historical false-positive prefix mismatch was resolved by a one-to-one canonical key assertion."
+  ),
+  paste0(
+    "For the unsupervised 1000 Genomes panel, the saved reference set is exactly reproduced by ",
+    "maximum ancestry proportion >0.80 in `gwas_ld_pruned.5.Q`. Component labels were validated ",
+    "against known 1000 Genomes superpopulations separately for each Q matrix."
+  ),
+  paste0(
+    "The v8 SRE hierarchy was frozen to the hierarchy written in the manuscript Methods: ",
+    "Hispanic > Black > EAS > SAS > Middle Eastern > Native American > White; all remaining ",
+    "records were assigned Other/Unknown."
+  ),
+  paste0(
+    "Majority GA was the largest of AMR, AFR, EUR, SAS, and EAS. Shannon entropy was calculated ",
+    "as -sum(p*log2(p)) and is reported in bits. `Multiple` required at least two nonmissing SRE ",
+    "selections; all others were labeled `Single/no multiple report`."
+  ),
+  paste0(
+    "Overall Cohen kappa used the five directly mapped categories (Hispanic/AMR, Black/AFR, ",
+    "White/EUR, SAS/SAS, EAS/EAS). Middle Eastern, Native American, and Other/Unknown were ",
+    "excluded because they do not have a one-to-one category in the five-component model. ",
+    "The kappa CI and entropy mean-difference/Cliff's-delta CIs use percentile bootstrap resampling."
+  ),
+  "",
+  "## Exact results",
+  "",
+  sprintf(
+    "- Cohort: n=%d; true-positive records n=%d; false-positive records n=%d.",
+    nrow(cohort),
+    count_value("Outcome", "True positive"),
+    count_value("Outcome", "False positive")
+  ),
+  sprintf(
+    "- SRE reporting: %d participants had multiple selections; %d had no multiple report. ",
+    count_value("SRE reporting status", "Multiple"),
+    count_value("SRE reporting status", "Single/no multiple report")
+  ),
+  paste0(
+    "- Assigned SRE counts under the v8 hierarchy: ",
+    paste(
+      sprintf(
+        "%s=%d",
+        sre_levels,
+        vapply(
+          sre_levels,
+          function(x) count_value("Assigned SRE (v8 hierarchy)", x),
+          numeric(1)
+        )
+      ),
+      collapse = "; "
+    ),
+    "."
+  ),
+  paste0(
+    "- Majority-GA counts: ",
+    paste(
+      sprintf(
+        "%s=%d",
+        ancestry_levels,
+        vapply(
+          ancestry_levels,
+          function(x) count_value("Majority genetic ancestry", x),
+          numeric(1)
+        )
+      ),
+      collapse = "; "
+    ),
+    "."
+  ),
+  sprintf(
+    paste0(
+      "- Five-category overall Cohen kappa: %.3f (bootstrap 95%% CI %.3f to %.3f; n=%d); ",
+      "observed agreement %.1f%%."
+    ),
+    kappa_result$kappa,
+    kappa_ci[1],
+    kappa_ci[2],
+    length(kappa_sre),
+    100 * kappa_result$observed
+  ),
+  sprintf(
+    paste0(
+      "- Entropy: single/no-multiple-report mean %.3f bits (SD %.3f; n=%d) versus ",
+      "multiple-report mean %.3f bits (SD %.3f; n=%d). Mean difference %.3f bits ",
+      "(bootstrap 95%% CI %.3f to %.3f); Cliff's delta %.3f (95%% CI %.3f to %.3f); ",
+      "Wilcoxon p=%s."
+    ),
+    mean(entropy_single), sd(entropy_single), length(entropy_single),
+    mean(entropy_multiple), sd(entropy_multiple), length(entropy_multiple),
+    entropy_mean_difference, entropy_mean_ci[1], entropy_mean_ci[2],
+    entropy_cliffs_delta, entropy_delta_ci[1], entropy_delta_ci[2],
+    format_p(entropy_wilcox$p.value)
+  ),
+  "",
+  "## Important caveats",
+  "",
+  paste0(
+    "- The v8 Methods hierarchy changes one multi-SRE participant from Native American under the ",
+    "legacy code to EAS because EAS precedes Native American. Consequently, v8 counts are EAS=34 ",
+    "and Native American=1, rather than the legacy EAS=33 and Native American=2."
+  ),
+  paste0(
+    "- The majority-GA totals generated from the local Q matrix are AMR=167, AFR=24, EUR=127, ",
+    "SAS=13, and EAS=47. They do not match the majority-GA totals currently stated in manuscript v7, ",
+    "which appear to reuse SRE totals. Figure 2 and its exact source table should replace typed prose."
+  ),
+  paste0(
+    "- Three records had no nonmissing first SRE selection. They are assigned Other/Unknown and are ",
+    "included in `Single/no multiple report` because no second selection was present."
+  ),
+  paste0(
+    "- AMR is an ADMIXTURE component label and should not be treated as equivalent to a social or ",
+    "tribal identity. SRE and genetic ancestry remain distinct constructs."
+  ),
+  paste0(
+    "- Upstream ADMIXTURE command lines, seeds, SNP-list provenance, and supervised population files ",
+    "are not present locally. The figures are reproducible from the saved Q/FAM/metadata inputs, but ",
+    "the full ancestry-inference pipeline is not yet reproducible."
+  ),
+  paste0(
+    "- Figures 1 and 4 contain anonymous individual ancestry profiles. Their source tables contain no ",
+    "sample IDs but remain restricted internal artifacts pending data-governance review."
+  ),
+  "",
+  "## Figure files",
+  "",
+  sprintf("- Figure 1: `%s` and `%s`", basename(figure1_paths[["pdf"]]), basename(figure1_paths[["png"]])),
+  sprintf("- Figure 2: `%s` and `%s`", basename(figure2_paths[["pdf"]]), basename(figure2_paths[["png"]])),
+  sprintf("- Figure 3: `%s` and `%s`", basename(figure3_paths[["pdf"]]), basename(figure3_paths[["png"]])),
+  sprintf("- Figure 4: `%s` and `%s`", basename(figure4_paths[["pdf"]]), basename(figure4_paths[["png"]])),
+  "",
+  "All PNG files were generated at 300 dpi; PDFs are vector outputs. Exact source-table mappings are in `tables/figure_source_manifest.csv`."
+)
+writeLines(report_lines, file.path(analysis_dir, "analysis_report.md"))
+
+# Privacy guard: no output table may contain source sample identifiers.
+output_tables <- list.files(table_dir, pattern = "\\.csv$", full.names = TRUE)
+for (table_path in output_tables) {
+  table_text <- paste(readLines(table_path, warn = FALSE), collapse = "\n")
+  if (grepl("NBSfalsepos_|NBSpatients_|HG[0-9]{4,}", table_text)) {
+    stop("Privacy guard failed; sample identifier found in output table: ", table_path)
+  }
+}
+
+message("Descriptive release complete.")
+message("Analysis report: ", file.path(analysis_dir, "analysis_report.md"))
+message("Figures: ", figure_dir)

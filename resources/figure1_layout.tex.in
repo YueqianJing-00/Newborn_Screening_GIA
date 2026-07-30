@@ -1,0 +1,42 @@
+\documentclass{article}
+\usepackage[paperwidth=960bp,paperheight=540bp,margin=0bp]{geometry}
+\usepackage{graphicx}
+\usepackage{eso-pic}
+\usepackage[T1]{fontenc}
+\usepackage[scaled]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+\AddToShipoutPictureFG*{%
+  \AtPageLowerLeft{%
+    \setlength{\unitlength}{1bp}%
+    \begin{picture}(0,0)
+      \put(0.000000,265.817480){%
+        \includegraphics[width=683.544409bp,height=250.000000bp]{\detokenize{@@FIGURE_DIR@@/PRE_GIA_individual_profiles.pdf}}%
+      }
+      \put(683.544409,290.950787){%
+        \includegraphics[width=272.168819bp,height=224.866693bp]{\detokenize{@@FIGURE_DIR@@/PRE_GIA_cross_classification_all.pdf}}%
+      }
+      \put(0.000000,7.908740){%
+        \includegraphics[width=289.125039bp,height=238.876063bp]{\detokenize{@@FIGURE_DIR@@/PRE_GIA_cross_classification_gt70.pdf}}%
+      }
+      \put(289.125039,7.908740){%
+        \includegraphics[width=347.730945bp,height=238.876063bp]{\detokenize{@@FIGURE_DIR@@/PRE_GIA_continuous_corresponding_proportion.pdf}}%
+      }
+      \put(633.435276,7.908740){%
+        \includegraphics[width=326.564724bp,height=238.876063bp]{\detokenize{@@FIGURE_DIR@@/PRE_GIA_threshold_sensitivity.pdf}}%
+      }
+
+      \put(7.200000,518.000000){\fontsize{18bp}{18bp}\selectfont A}
+      \put(690.744400,518.000000){\fontsize{18bp}{18bp}\selectfont B}
+      \put(7.200000,241.000000){\fontsize{18bp}{18bp}\selectfont C}
+      \put(296.325000,245.000000){\fontsize{18bp}{18bp}\selectfont D}
+      \put(630.913100,245.000000){\fontsize{18bp}{18bp}\selectfont E}
+    \end{picture}%
+  }%
+}
+\null
+\end{document}
+
