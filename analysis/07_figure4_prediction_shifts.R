@@ -86,7 +86,6 @@ input_files <- c(
   reference_metadata = file.path(input_dir, "all_phase3.psam"),
   mean_oof_predictions = file.path(source_table_dir, "mean_oof_predictions.csv"),
   repeat_oof_predictions = file.path(source_table_dir, "oof_predictions_by_repeat.csv"),
-  fold_assignments = file.path(source_table_dir, "fold_assignments.csv"),
   source_modeling_dataset = file.path(
     source_table_dir,
     "modeling_dataset_deidentified_restricted_internal.csv"
@@ -146,10 +145,15 @@ if (length(missing_columns) > 0L) stop("Missing phenotype columns: ", paste(miss
 
 numeric_columns <- c("BIRTH_WT", "TPN_HYPERAL", "AGE_AT_COLCTN", metabolite_features)
 phenotype[, (numeric_columns) := lapply(.SD, numeric_clean), .SDcols = numeric_columns]
-phenotype[, male := fifelse(GENDER == "M", 1, fifelse(GENDER == "F", 0, NA_real_))]
-phenotype[, outcome := fifelse(
+phenotype[, male := fcase(
+  GENDER == "M", 1,
+  GENDER == "F", 0,
+  default = NA_real_
+)]
+phenotype[, outcome := fcase(
   `Group (patient, controls, falsepos)` == "patients", "TP",
-  fifelse(`Group (patient, controls, falsepos)` %in% c("falsepos284", "falsepos754"), "FP", NA_character_)
+  `Group (patient, controls, falsepos)` %in% c("falsepos284", "falsepos754"), "FP",
+  default = NA_character_
 )]
 if (anyNA(phenotype$outcome)) stop("Unexpected outcome group labels.")
 phenotype[, c3_c2_ratio := fifelse(C02 > 0, C03 / C02, NA_real_)]
@@ -210,10 +214,10 @@ model_data[, majority_GIA_confidence := fifelse(
 
 pre_to_gia <- c(White = "EUR", Black = "AFR", Hispanic = "AMR", EAS = "EAS", SAS = "SAS")
 model_data[, mapped_PRE_component := unname(pre_to_gia[as.character(PRE_category)])]
-model_data[, PRE_GIA_relationship := fifelse(
-  is.na(mapped_PRE_component),
-  "No direct five-component mapping",
-  fifelse(mapped_PRE_component == majority_GIA, "PRE-GIA concordant", "PRE-GIA discordant")
+model_data[, PRE_GIA_relationship := fcase(
+  is.na(mapped_PRE_component), "No direct five-component mapping",
+  mapped_PRE_component == majority_GIA, "PRE-GIA concordant",
+  default = "PRE-GIA discordant"
 )]
 model_data[, PRE_aligned_GIA_proportion := mapply(
   function(component, row_index) {
@@ -246,7 +250,9 @@ model_names <- c(
   gia = "Clinical + metabolites + GIA",
   both = "Clinical + metabolites + PRE + GIA"
 )
-if (!setequal(unique(mean_predictions$model), unname(model_names))) stop("Unexpected model names in mean OOF predictions.")
+if (!setequal(unique(mean_predictions$model), unname(model_names))) {
+  stop("Unexpected model names in mean OOF predictions.")
+}
 
 mean_wide <- dcast(mean_predictions, analysis_id + outcome ~ model, value.var = "probability")
 setnames(mean_wide, unname(model_names), paste0("p_", names(model_names)))
@@ -272,10 +278,10 @@ subject[, probability_change := p_both - p_pre]
 subject[, correct_direction_shift := fifelse(outcome == "TP", probability_change, -probability_change)]
 subject[, brier_improvement :=
   (outcome_numeric - p_pre)^2 - (outcome_numeric - p_both)^2]
-subject[, benefit_direction := fifelse(
-  correct_direction_shift > 0,
-  "Moved toward correct outcome",
-  fifelse(correct_direction_shift < 0, "Moved away from correct outcome", "No change")
+subject[, benefit_direction := fcase(
+  correct_direction_shift > 0, "Moved toward correct outcome",
+  correct_direction_shift < 0, "Moved away from correct outcome",
+  default = "No change"
 )]
 
 repeat_wide <- dcast(
@@ -303,14 +309,6 @@ subject_stability <- repeat_wide[, .(
 ), by = .(analysis_id, outcome)]
 subject <- merge(subject, subject_stability, by = c("analysis_id", "outcome"), all.x = TRUE, sort = FALSE)
 
-# This table is restricted because it combines individual outcome, PRE, GIA,
-# and OOF predictions. It contains deidentified analysis IDs only.
-restricted_subject_path <- file.path(
-  table_dir,
-  "subject_level_case_patterns_source_restricted_internal.csv"
-)
-fwrite(subject, restricted_subject_path)
-
 op_pre <- operating_point(subject$outcome, subject$p_pre, args$target_sensitivity)
 op_both <- operating_point(subject$outcome, subject$p_both, args$target_sensitivity)
 operating_points <- rbind(
@@ -321,15 +319,18 @@ fwrite(operating_points, file.path(table_dir, "operating_points_mean_oof.csv"))
 
 subject[, disposition_pre := fifelse(p_pre >= op_pre$threshold, "Refer", "Do not refer")]
 subject[, disposition_both := fifelse(p_both >= op_both$threshold, "Refer", "Do not refer")]
-subject[, operational_impact := fifelse(
-  disposition_pre == disposition_both,
-  "No change",
-  fifelse(
-    (outcome == "TP" & disposition_pre == "Do not refer" & disposition_both == "Refer") |
-      (outcome == "FP" & disposition_pre == "Refer" & disposition_both == "Do not refer"),
-    "Beneficial change",
-    "Harmful change"
+classify_transition <- function(outcome, before, after) {
+  beneficial <-
+    (outcome == "TP" & before == "Do not refer" & after == "Refer") |
+    (outcome == "FP" & before == "Refer" & after == "Do not refer")
+  fcase(
+    before == after, "No change",
+    beneficial, "Beneficial change",
+    default = "Harmful change"
   )
+}
+subject[, operational_impact := classify_transition(
+  outcome, disposition_pre, disposition_both
 )]
 operational_counts <- subject[, .N, by = .(outcome, disposition_pre, disposition_both)]
 operational_grid <- CJ(
@@ -346,22 +347,18 @@ operational_transitions <- merge(
   sort = FALSE
 )
 operational_transitions[is.na(N), N := 0L]
-operational_transitions[, operational_impact := fifelse(
-  disposition_pre == disposition_both,
-  "No change",
-  fifelse(
-    (outcome == "TP" & disposition_pre == "Do not refer" & disposition_both == "Refer") |
-      (outcome == "FP" & disposition_pre == "Refer" & disposition_both == "Do not refer"),
-    "Beneficial change",
-    "Harmful change"
-  )
+operational_transitions[, operational_impact := classify_transition(
+  outcome, disposition_pre, disposition_both
 )]
 operational_transitions[, total_outcome := sum(N), by = outcome]
 operational_transitions[, proportion := N / total_outcome]
 fwrite(operational_transitions, file.path(table_dir, "operational_reclassification_counts.csv"))
 
-# Refresh the restricted table after adding the retrospective operating-point
-# dispositions. The publication figure uses only aggregate transition counts.
+# Individual outcome, PRE, GIA, and prediction fields remain restricted.
+restricted_subject_path <- file.path(
+  table_dir,
+  "subject_level_case_patterns_source_restricted_internal.csv"
+)
 fwrite(subject, restricted_subject_path)
 
 # Stability and subgroup summaries ----
@@ -396,11 +393,15 @@ make_subgroup_long <- function(data) {
 }
 
 subgroup_long <- make_subgroup_long(subject)
+bootstrap_indices <- function(n, replicates) {
+  index <- replicate(replicates, sample.int(n, n, replace = TRUE))
+  if (n == 1L) matrix(index, nrow = 1L) else index
+}
+
 set.seed(args$seed + 1000L)
 subgroup_summary <- subgroup_long[, {
   n_group <- .N
-  bootstrap_index <- replicate(args$bootstrap, sample.int(n_group, n_group, replace = TRUE))
-  if (n_group == 1L) bootstrap_index <- matrix(bootstrap_index, nrow = 1L)
+  bootstrap_index <- bootstrap_indices(n_group, args$bootstrap)
   shift_boot <- colMeans(matrix(correct_direction_shift[bootstrap_index], nrow = n_group))
   benefit_boot <- colMeans(matrix((correct_direction_shift > 0)[bootstrap_index], nrow = n_group))
   .(
@@ -427,8 +428,7 @@ fwrite(subgroup_summary, file.path(table_dir, "case_pattern_subgroup_summary.csv
 set.seed(args$seed + 2000L)
 gia_confidence_summary <- subject[, {
   n_group <- .N
-  bootstrap_index <- replicate(args$bootstrap, sample.int(n_group, n_group, replace = TRUE))
-  if (n_group == 1L) bootstrap_index <- matrix(bootstrap_index, nrow = 1L)
+  bootstrap_index <- bootstrap_indices(n_group, args$bootstrap)
   raw_change_boot <- colMeans(matrix(probability_change[bootstrap_index], nrow = n_group))
   .(
     n = n_group,

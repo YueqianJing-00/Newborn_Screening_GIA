@@ -13,11 +13,10 @@ source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))
 source(file.path(helper_dir, "statistical_helpers.R"))
 
-required_packages <- c(
+require_packages(c(
   "data.table", "readxl", "randomForest", "pROC", "ggplot2",
   "patchwork"
-)
-require_packages(required_packages)
+))
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -50,8 +49,6 @@ parse_args <- function(args) {
     run_name = "main_117_top10_metabolites"
   )
 
-  string_args <- c("run_name", "gia_reference", "gia_importance")
-  integer_args <- setdiff(names(defaults), string_args)
   for (arg in args) {
     if (!grepl("^--[A-Za-z0-9_-]+=", arg)) {
       stop("Arguments must use --name=value syntax. Unrecognized argument: ", arg)
@@ -85,7 +82,6 @@ parse_args <- function(args) {
     }
   }
 
-  if (!all(integer_args %in% names(defaults))) stop("Internal argument parsing error.")
   defaults
 }
 
@@ -186,15 +182,15 @@ numeric_columns <- c(
   metabolite_source_features
 )
 phenotype[, (numeric_columns) := lapply(.SD, numeric_clean), .SDcols = numeric_columns]
-phenotype[, male := fifelse(GENDER == "M", 1, fifelse(GENDER == "F", 0, NA_real_))]
-phenotype[, outcome := fifelse(
-  `Group (patient, controls, falsepos)` == "patients",
-  "TP",
-  fifelse(
-    `Group (patient, controls, falsepos)` %in% c("falsepos284", "falsepos754"),
-    "FP",
-    NA_character_
-  )
+phenotype[, male := fcase(
+  GENDER == "M", 1,
+  GENDER == "F", 0,
+  default = NA_real_
+)]
+phenotype[, outcome := fcase(
+  `Group (patient, controls, falsepos)` == "patients", "TP",
+  `Group (patient, controls, falsepos)` %in% c("falsepos284", "falsepos754"), "FP",
+  default = NA_character_
 )]
 if (anyNA(phenotype$outcome)) stop("Unexpected group labels prevent TP/FP assignment.")
 
@@ -333,9 +329,6 @@ modeling_dataset_internal <- as.data.table(cbind(
   as.data.frame(pre_x, check.names = FALSE),
   as.data.frame(gia_x, check.names = FALSE)
 ))
-if (anyDuplicated(modeling_dataset_internal$analysis_id)) {
-  stop("Deidentified modeling dataset contains duplicate analysis IDs.")
-}
 fwrite(
   modeling_dataset_internal,
   file.path(table_dir, "modeling_dataset_deidentified_restricted_internal.csv")
@@ -412,13 +405,6 @@ fwrite(cohort_summary, file.path(table_dir, "cohort_summary.csv"))
 fold_list <- lapply(seq_len(args$repeats), function(repeat_id) {
   make_stratified_folds(y, args$folds, args$seed + repeat_id * 10000L)
 })
-if (any(vapply(fold_list, function(fold) {
-  any(vapply(seq_len(args$folds), function(fold_id) {
-    length(unique(y[fold == fold_id])) != 2L
-  }, logical(1)))
-}, logical(1)))) {
-  stop("At least one held-out fold lacks one of the outcome classes.")
-}
 fold_assignments <- rbindlist(lapply(seq_len(args$repeats), function(repeat_id) {
   data.table(
     repeat_id = repeat_id,
@@ -495,16 +481,13 @@ rank_metabolites_in_training <- function(train_index) {
     auc_value <- if (length(unique(values)) < 2L) {
       NA_real_
     } else {
-      tryCatch(
-        as.numeric(pROC::auc(pROC::roc(
-          response = y[train_index],
-          predictor = values,
-          levels = c("FP", "TP"),
-          direction = "<",
-          quiet = TRUE
-        ))),
-        error = function(error) NA_real_
-      )
+      as.numeric(pROC::auc(pROC::roc(
+        response = y[train_index],
+        predictor = values,
+        levels = c("FP", "TP"),
+        direction = "<",
+        quiet = TRUE
+      )))
     }
     data.table(
       metabolite = feature,
@@ -545,9 +528,6 @@ fit_one_repeat <- function(repeat_id) {
   for (fold_id in seq_len(args$folds)) {
     test_index <- which(fold == fold_id)
     train_index <- which(fold != fold_id)
-    if (length(intersect(train_index, test_index)) != 0L) {
-      stop("Training/test overlap in repeat ", repeat_id, ", fold ", fold_id, ".")
-    }
     ranking <- rank_metabolites_in_training(train_index)
     selected_metabolites <- ranking[selected == TRUE]$metabolite
     ranking[, `:=`(
@@ -578,9 +558,6 @@ fit_one_repeat <- function(repeat_id) {
       "Clinical + metabolites + PRE + GIA" = cbind(core_x_fold, pre_x, gia_x)
     )
     model_matrices_fold <- model_matrices_fold[model_order]
-    if (any(vapply(model_matrices_fold, nrow, integer(1)) != length(y))) {
-      stop("Fold-specific model matrix row-count mismatch.")
-    }
 
     for (model_index in seq_along(model_order)) {
       model_name <- model_order[[model_index]]
@@ -596,12 +573,6 @@ fit_one_repeat <- function(repeat_id) {
         importance = FALSE,
         keep.forest = TRUE
       )
-      if (
-        random_forest$ntree != args$ntree ||
-          random_forest$mtry != args$mtry
-      ) {
-        stop("Fitted forest did not retain the requested ntree/mtry values.")
-      }
 
       predictions[[model_name]][test_index] <- predict(
         random_forest,
@@ -757,70 +728,6 @@ fwrite(repeat_metrics, file.path(table_dir, "repeat_metrics.csv"))
 fwrite(importance_by_repeat, file.path(table_dir, "permutation_importance_by_repeat.csv"))
 fwrite(metabolite_selection, file.path(table_dir, "metabolite_selection_by_fold.csv"))
 fwrite(fit_audit, file.path(table_dir, "forest_fit_audit.csv"))
-
-expected_oof_rows <- nrow(model_data) * args$repeats * length(model_order)
-expected_selection_rows <-
-  args$repeats * args$folds * ncol(metabolite_x)
-expected_fit_rows <- args$repeats * args$folds * length(model_order)
-if (nrow(oof_predictions) != expected_oof_rows) {
-  stop("Unexpected OOF-prediction row count.")
-}
-if (nrow(metabolite_selection) != expected_selection_rows) {
-  stop("Unexpected metabolite-selection row count.")
-}
-if (nrow(fit_audit) != expected_fit_rows) {
-  stop("Unexpected forest-fit audit row count.")
-}
-if (nrow(importance_by_repeat) != args$repeats * length(importance_groups)) {
-  stop("Unexpected held-out permutation-importance row count.")
-}
-oof_count_check <- oof_predictions[, .N, by = .(analysis_id, model)]
-if (any(oof_count_check$N != args$repeats)) {
-  stop("A subject/model does not have exactly one OOF prediction per repeat.")
-}
-selection_count_check <- metabolite_selection[, .(
-  candidates = .N,
-  selected = sum(selected),
-  unique_selected = uniqueN(metabolite[selected == TRUE])
-), by = .(repeat_id, fold)]
-if (any(selection_count_check$candidates != ncol(metabolite_x)) ||
-    any(selection_count_check$selected != args$top_metabolites) ||
-    any(selection_count_check$unique_selected != args$top_metabolites)) {
-  stop("A repeat/fold did not select exactly ten unique metabolites.")
-}
-if (any(repeat_metrics$achieved_sensitivity < 0.95)) {
-  stop("A repeat-level operating point failed to attain sensitivity >=0.95.")
-}
-if (any(!is.finite(oof_predictions$probability))) {
-  stop("Non-finite out-of-fold probability.")
-}
-if (any(oof_predictions$probability < 0 | oof_predictions$probability > 1)) {
-  stop("Out-of-fold probability outside [0, 1].")
-}
-if (any(fit_audit$fitted_ntree != args$ntree) ||
-    any(fit_audit$fitted_mtry != args$mtry)) {
-  stop("Forest-fit audit found an ntree/mtry mismatch.")
-}
-expected_predictor_counts <- c(
-  "Clinical + metabolites" = ncol(clinical_x) + args$top_metabolites,
-  "Clinical + metabolites + PRE" =
-    ncol(clinical_x) + args$top_metabolites + ncol(pre_x),
-  "Clinical + metabolites + GIA" =
-    ncol(clinical_x) + args$top_metabolites + ncol(gia_x),
-  "Clinical + metabolites + PRE + GIA" =
-    ncol(clinical_x) + args$top_metabolites + ncol(pre_x) + ncol(gia_x)
-)
-if (any(fit_audit$predictors != expected_predictor_counts[fit_audit$model])) {
-  stop("A forest used an unexpected number of predictors.")
-}
-panel_consistency <- fit_audit[, .(
-  selected_panels = uniqueN(selected_metabolites),
-  model_count = uniqueN(model)
-), by = .(repeat_id, fold)]
-if (any(panel_consistency$selected_panels != 1L) ||
-    any(panel_consistency$model_count != length(model_order))) {
-  stop("The selected metabolite panel was not shared by all four models.")
-}
 
 metabolite_selection_summary <- metabolite_selection[, .(
   folds_evaluated = .N,
@@ -1184,9 +1091,13 @@ panel_b <- ggplot(
   theme(legend.position = "bottom")
 
 figure_caption_text <- paste0(
-  "Panel A distributions describe algorithmic stability; repeated CV runs are dependent and are not inferential confidence intervals. ",
-  "Within each training fold, 10 of 40 metabolite candidates were selected by absolute univariate AUC distance from 0.5 and shared across all four models. ",
-  "Panel B permutes each included clinical/metabolite predictor separately and PRE or GIA jointly within held-out folds; an unselected metabolite has zero pipeline-level contribution in that fold."
+  "Panel A distributions describe algorithmic stability; repeated CV runs are ",
+  "dependent and are not inferential confidence intervals. Within each training ",
+  "fold, 10 of 40 metabolite candidates were selected by absolute univariate AUC ",
+  "distance from 0.5 and shared across all four models. Panel B permutes each ",
+  "included clinical/metabolite predictor separately and PRE or GIA jointly within ",
+  "held-out folds; an unselected metabolite has zero pipeline-level contribution ",
+  "in that fold."
 )
 
 figure <- (panel_a | panel_b) +

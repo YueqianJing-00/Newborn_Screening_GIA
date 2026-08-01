@@ -1,7 +1,5 @@
 #!/usr/bin/env Rscript
 
-options(stringsAsFactors = FALSE)
-
 script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
@@ -10,10 +8,9 @@ helper_dir <- file.path(dirname(script_path), "..", "R")
 source(file.path(helper_dir, "project_setup.R"))
 source(file.path(helper_dir, "plot_helpers.R"))
 
-required_packages <- c(
+require_packages(c(
   "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr"
-)
-require_packages(required_packages)
+))
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -24,7 +21,6 @@ suppressPackageStartupMessages({
 })
 
 paths <- project_paths(script_path)
-project_root <- paths$root
 run_dir <- file.path(paths$results, "figure2")
 figure_dir <- file.path(run_dir, "figures")
 table_dir <- file.path(run_dir, "tables")
@@ -642,21 +638,21 @@ combined_figure <- (entropy_figure / profile_figure) +
   plot_layout(heights = c(1.0, 1.55), guides = "collect") &
   theme(legend.position = "right")
 
-entropy_paths <- save_figure_pair(
+save_figure_pair(
   entropy_figure,
   figure_dir,
   "figure2_entropy",
   width = 12.5,
   height = 5.0
 )
-profile_paths <- save_figure_pair(
+save_figure_pair(
   profile_figure,
   figure_dir,
   "figure2_multiple_pre_profiles",
   width = 13.5,
   height = 7.2
 )
-combined_paths <- save_figure_pair(
+save_figure_pair(
   combined_figure,
   figure_dir,
   "figure2",

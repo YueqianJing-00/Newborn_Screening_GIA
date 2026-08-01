@@ -32,13 +32,10 @@ qa_dir <- file.path(run_dir, "qa")
 make_directories(qa_dir)
 
 checks <- character()
-record_check <- function(label) {
-  checks <<- c(checks, paste0("PASS: ", label))
-  invisible(TRUE)
-}
 assert_true <- function(condition, label) {
   if (!isTRUE(condition)) stop("VALIDATION FAILED: ", label, call. = FALSE)
-  record_check(label)
+  checks <<- c(checks, paste0("PASS: ", label))
+  invisible(TRUE)
 }
 assert_near <- function(observed, expected, label, tolerance = 1e-12) {
   ok <- length(observed) == length(expected) &&
@@ -75,7 +72,6 @@ selection_summary <- read_table("metabolite_selection_summary.csv")
 fit_audit <- read_table("forest_fit_audit.csv")
 oof <- read_table("oof_predictions_by_repeat.csv")
 mean_oof <- read_table("mean_oof_predictions.csv")
-repeat_metrics <- read_table("repeat_metrics.csv")
 operating_points <- read_table("primary_operating_points.csv")
 primary <- read_table("primary_performance.csv")
 bootstrap_metrics <- read_table("subject_bootstrap_metrics.csv")

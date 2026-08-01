@@ -13,11 +13,10 @@ source(file.path(helper_dir, "pre_helpers.R"))
 source(file.path(helper_dir, "statistical_helpers.R"))
 source(file.path(helper_dir, "plot_helpers.R"))
 
-required_packages <- c(
+require_packages(c(
   "data.table", "dplyr", "ggplot2", "patchwork", "ragg",
   "readxl", "scales", "tidyr"
-)
-require_packages(required_packages)
+))
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -30,7 +29,6 @@ suppressPackageStartupMessages({
 })
 
 paths <- project_paths(script_path)
-project_root <- paths$root
 input_dir <- paths$data
 analysis_dir <- file.path(paths$results, "descriptive")
 table_dir <- file.path(analysis_dir, "tables")
@@ -711,7 +709,7 @@ figure1b <- ggplot(cohort_long, aes(plot_index, proportion, fill = ancestry)) +
 figure1 <- (figure1a / figure1b) +
   plot_layout(heights = c(1.05, 1), guides = "collect") &
   theme(legend.position = "bottom")
-figure1_paths <- save_figure_pair(
+save_figure_pair(
   figure1,
   figure_dir,
   "reference_and_study_ancestry",
@@ -788,7 +786,7 @@ figure2c <- ggplot(
 
 figure2 <- figure2a / (figure2b | figure2c) +
   plot_layout(heights = c(1.15, 1))
-figure2_paths <- save_figure_pair(
+save_figure_pair(
   figure2,
   figure_dir,
   "pre_largest_gia_concordance",
@@ -837,7 +835,10 @@ figure3a <- ggplot(
   )
 
 entropy_annotation <- sprintf(
-  "Mean difference = %.3f bits\nbootstrap 95%% CI %.3f to %.3f\nCliff's delta = %.3f (95%% CI %.3f to %.3f)\nWilcoxon p = %s",
+  paste0(
+    "Mean difference = %.3f bits\nbootstrap 95%% CI %.3f to %.3f\n",
+    "Cliff's delta = %.3f (95%% CI %.3f to %.3f)\nWilcoxon p = %s"
+  ),
   entropy_mean_difference,
   entropy_mean_ci[1],
   entropy_mean_ci[2],
@@ -882,7 +883,7 @@ figure3b <- ggplot(
   theme(legend.position = "none")
 
 figure3 <- figure3a | figure3b
-figure3_paths <- save_figure_pair(
+save_figure_pair(
   figure3,
   figure_dir,
   "entropy_by_pre_and_reporting_status",
@@ -938,14 +939,8 @@ write.csv(
 multi_raw_categories <- lapply(seq_len(nrow(multi_raw_race)), function(i) {
   unique(na.omit(vapply(multi_raw_race[i, ], harmonize_pre_value, character(1))))
 })
-original_multi_order <- multi_indices
-plot_order_to_original <- original_multi_order[match(
-  multi_plot$reported_sre_combination,
-  multi_combinations
-)]
 
-# The match above is ambiguous for repeated combinations. Build the tile source
-# before sorting with a temporary row key, then drop the key from saved output.
+# A temporary row key preserves repeated PRE combinations while sorting.
 multi_with_key <- cohort[multi_indices, , drop = FALSE]
 multi_with_key$temp_row_key <- seq_len(nrow(multi_with_key))
 multi_with_key$reported_sre_combination <- multi_combinations
@@ -1070,7 +1065,7 @@ figure4b <- ggplot(
   )
 
 figure4 <- figure4a / figure4b + plot_layout(heights = c(2.8, 1.55))
-figure4_paths <- save_figure_pair(
+save_figure_pair(
   figure4,
   figure_dir,
   "multiple_pre_ancestry_profiles",

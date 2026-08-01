@@ -24,5 +24,5 @@ save_figure_pair <- function(plot, directory, stem, width, height) {
     device = ragg::agg_png,
     bg = "white"
   )
-  paths
+  invisible(paths)
 }

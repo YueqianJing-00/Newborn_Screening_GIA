@@ -11,10 +11,9 @@ helper_dir <- file.path(dirname(script_path), "..", "R")
 source(file.path(helper_dir, "project_setup.R"))
 source(file.path(helper_dir, "statistical_helpers.R"))
 
-required_packages <- c(
+require_packages(c(
   "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr"
-)
-require_packages(required_packages)
+))
 
 suppressPackageStartupMessages({
   library(dplyr)

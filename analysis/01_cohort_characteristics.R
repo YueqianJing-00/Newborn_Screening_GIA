@@ -16,7 +16,6 @@ suppressPackageStartupMessages({
 })
 
 paths <- project_paths(script_path)
-project_root <- paths$root
 input_dir <- paths$data
 analysis_dir <- file.path(paths$results, "cohort_characteristics")
 table_dir <- file.path(analysis_dir, "tables")
@@ -100,16 +99,18 @@ outcome <- ifelse(
   "True positive",
   "False positive"
 )
-gender <- ifelse(
-  cohort[["GENDER"]] == "M",
-  "Male",
-  ifelse(cohort[["GENDER"]] == "F", "Female", "Missing")
+gender <- fcase(
+  cohort[["GENDER"]] == "M", "Male",
+  cohort[["GENDER"]] == "F", "Female",
+  default = "Missing"
 )
-gender[is.na(gender)] <- "Missing"
 
 tpn_raw <- suppressWarnings(as.numeric(cohort[["TPN_HYPERAL"]]))
-tpn <- ifelse(tpn_raw == 0, "No", ifelse(tpn_raw == 1, "Yes", "Missing/invalid"))
-tpn[is.na(tpn)] <- "Missing/invalid"
+tpn <- fcase(
+  tpn_raw == 0, "No",
+  tpn_raw == 1, "Yes",
+  default = "Missing/invalid"
+)
 
 birth_weight <- suppressWarnings(as.numeric(cohort[["BIRTH_WT"]]))
 collection_age <- suppressWarnings(as.numeric(cohort[["AGE_AT_COLCTN"]]))
@@ -245,74 +246,35 @@ gestational_week <- floor(gestational_days / 7)
 gestational_week[
   is.na(gestational_days) | gestational_days < 140 | gestational_days > 315
 ] <- NA_real_
-gestational_category <- ifelse(
-  is.na(gestational_week),
-  "Unknown/invalid",
-  ifelse(
-    gestational_week > 42,
-    ">42",
-    ifelse(
-      gestational_week == 42,
-      "42",
-      ifelse(
-        gestational_week == 41,
-        "41",
-        ifelse(
-          gestational_week >= 39,
-          "39-40",
-          ifelse(
-            gestational_week >= 37,
-            "37-38",
-            ifelse(gestational_week >= 28, "28-36", "<28")
-          )
-        )
-      )
-    )
-  )
+gestational_category <- fcase(
+  is.na(gestational_week), "Unknown/invalid",
+  gestational_week > 42, ">42",
+  gestational_week == 42, "42",
+  gestational_week == 41, "41",
+  gestational_week >= 39, "39-40",
+  gestational_week >= 37, "37-38",
+  gestational_week >= 28, "28-36",
+  default = "<28"
 )
 
-birth_weight_category <- ifelse(
-  is.na(birth_weight),
-  "Unknown",
-  ifelse(
-    birth_weight > 5000,
-    ">5000",
-    ifelse(
-      birth_weight >= 4001,
-      "4001-5000",
-      ifelse(
-        birth_weight >= 3501,
-        "3501-4000",
-        ifelse(
-          birth_weight >= 3001,
-          "3001-3500",
-          ifelse(
-            birth_weight >= 2500,
-            "2500-3000",
-            ifelse(birth_weight >= 1000, "1000-2499", "<1000")
-          )
-        )
-      )
-    )
-  )
+birth_weight_category <- fcase(
+  is.na(birth_weight), "Unknown",
+  birth_weight > 5000, ">5000",
+  birth_weight >= 4001, "4001-5000",
+  birth_weight >= 3501, "3501-4000",
+  birth_weight >= 3001, "3001-3500",
+  birth_weight >= 2500, "2500-3000",
+  birth_weight >= 1000, "1000-2499",
+  default = "<1000"
 )
 
-collection_age_category <- ifelse(
-  is.na(collection_age),
-  "Unknown",
-  ifelse(
-    collection_age < 12,
-    "<12",
-    ifelse(
-      collection_age < 24,
-      "12-23",
-      ifelse(
-        collection_age <= 48,
-        "24-48",
-        ifelse(collection_age <= 168, "49-168", ">168")
-      )
-    )
-  )
+collection_age_category <- fcase(
+  is.na(collection_age), "Unknown",
+  collection_age < 12, "<12",
+  collection_age < 24, "12-23",
+  collection_age <= 48, "24-48",
+  collection_age <= 168, "49-168",
+  default = ">168"
 )
 
 pre_reporting <- ifelse(
@@ -325,10 +287,6 @@ tpn_stratified <- ifelse(tpn == "Missing/invalid", "Unknown", tpn)
 
 fp_denominator <- sum(outcome == "False positive")
 tp_denominator <- sum(outcome == "True positive")
-
-format_subgroup_count <- function(n, denominator) {
-  sprintf("%d (%.1f%%)", n, 100 * n / denominator)
-}
 
 stratified_section <- function(label) {
   data.frame(
@@ -357,10 +315,10 @@ stratified_rows <- function(values, levels) {
           label = level,
           false_positive_n = fp_n,
           false_positive_denominator = fp_denominator,
-          false_positive_display = format_subgroup_count(fp_n, fp_denominator),
+          false_positive_display = format_count(fp_n, fp_denominator),
           true_positive_n = tp_n,
           true_positive_denominator = tp_denominator,
-          true_positive_display = format_subgroup_count(tp_n, tp_denominator),
+          true_positive_display = format_count(tp_n, tp_denominator),
           stringsAsFactors = FALSE
         )
       }
