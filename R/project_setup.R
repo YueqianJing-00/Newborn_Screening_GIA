@@ -11,12 +11,15 @@ current_script <- function() {
 find_project_root <- function(start = getwd()) {
   path <- normalizePath(start, mustWork = TRUE)
   repeat {
-    if (file.exists(file.path(path, "DESCRIPTION"))) return(path)
+    is_project <- file.exists(file.path(path, "run_all.R")) &&
+      dir.exists(file.path(path, "analysis")) &&
+      dir.exists(file.path(path, "R"))
+    if (is_project) return(path)
     parent <- dirname(path)
     if (identical(parent, path)) break
     path <- parent
   }
-  stop("Could not find the project root (DESCRIPTION is missing).", call. = FALSE)
+  stop("Could not find the project root.", call. = FALSE)
 }
 
 project_paths <- function(script = current_script()) {
@@ -78,16 +81,6 @@ make_directories <- function(...) {
     showWarnings = FALSE
   )
   invisible(paths)
-}
-
-sha256_files <- function(paths) {
-  vapply(
-    paths,
-    digest::digest,
-    character(1),
-    file = TRUE,
-    algo = "sha256"
-  )
 }
 
 is_run_name <- function(x) {

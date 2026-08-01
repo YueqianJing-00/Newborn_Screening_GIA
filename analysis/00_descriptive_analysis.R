@@ -14,7 +14,7 @@ source(file.path(helper_dir, "statistical_helpers.R"))
 source(file.path(helper_dir, "plot_helpers.R"))
 
 required_packages <- c(
-  "data.table", "digest", "dplyr", "ggplot2", "patchwork", "ragg",
+  "data.table", "dplyr", "ggplot2", "patchwork", "ragg",
   "readxl", "scales", "tidyr"
 )
 require_packages(required_packages)
@@ -52,18 +52,6 @@ input_files <- c(
   reference_selection_q = file.path(input_dir, "gwas_ld_pruned.5.Q")
 )
 require_files(input_files)
-
-input_checksums <- data.frame(
-  input_role = names(input_files),
-  file = basename(input_files),
-  sha256 = sha256_files(input_files),
-  stringsAsFactors = FALSE
-)
-write.csv(
-  input_checksums,
-  file.path(table_dir, "input_checksums_sha256.csv"),
-  row.names = FALSE
-)
 
 # Read and validate inputs ----
 
@@ -1090,182 +1078,6 @@ figure4_paths <- save_figure_pair(
   height = 7.8
 )
 
-# Run records ----
-
-figure_manifest <- data.frame(
-  figure = paste0("Figure ", 1:4),
-  pdf = basename(c(
-    figure1_paths[["pdf"]], figure2_paths[["pdf"]],
-    figure3_paths[["pdf"]], figure4_paths[["pdf"]]
-  )),
-  png_300dpi = basename(c(
-    figure1_paths[["png"]], figure2_paths[["png"]],
-    figure3_paths[["png"]], figure4_paths[["png"]]
-  )),
-  primary_source_tables = c(
-    "figure1_reference_admixture_source_restricted_internal.csv; figure1_cohort_admixture_source_restricted_internal.csv",
-    "figure2_sre_majority_ga_source.csv",
-    "figure3_entropy_source_restricted_internal.csv; figure3_entropy_summary.csv; entropy_overall_single_vs_multiple_bootstrap.csv",
-    "figure4_multisre_admixture_source_restricted_internal.csv; figure4_multisre_selection_tiles_source_restricted_internal.csv"
-  ),
-  release_note = c(
-    "Individual-level ancestry profiles are deidentified but remain restricted pending governance review.",
-    "Aggregate table; suitable for manuscript cross-checking.",
-    "Summary tables are aggregate; individual entropy source is restricted internal.",
-    "Individual-level ancestry profiles are deidentified but remain restricted pending governance review."
-  ),
-  stringsAsFactors = FALSE
-)
-write.csv(
-  figure_manifest,
-  file.path(table_dir, "figure_source_manifest.csv"),
-  row.names = FALSE
-)
-
-capture.output(sessionInfo(), file = file.path(analysis_dir, "sessionInfo.txt"))
-
-count_value <- function(section, category) {
-  cohort_counts$n[
-    cohort_counts$section == section & cohort_counts$category == category
-  ][1]
-}
-
-report_lines <- c(
-  "# PRE-GIA descriptive analysis",
-  "",
-  sprintf("Run date: %s", format(Sys.Date(), "%Y-%m-%d")),
-  sprintf("Seed: %d; bootstrap replicates: %s", seed, comma(bootstrap_replicates)),
-  "",
-  "## Methods",
-  "",
-  paste0(
-    "The 378 study participants were joined to the phenotype workbook by validated sample keys. ",
-    "The saved 2,158-person 1000 Genomes reference set was identified by ID rather than row position. ",
-    "The historical false-positive prefix mismatch was resolved by a one-to-one canonical key assertion."
-  ),
-  paste0(
-    "For the unsupervised 1000 Genomes panel, the saved reference set is exactly reproduced by ",
-    "maximum ancestry proportion >0.80 in `gwas_ld_pruned.5.Q`. Component labels were validated ",
-    "against known 1000 Genomes superpopulations separately for each Q matrix."
-  ),
-  paste0(
-    "PRE was assigned using the hierarchy defined in the Methods: ",
-    "Hispanic > Black > EAS > SAS > Middle Eastern > Native American > White; all remaining ",
-    "records were assigned Other/Unknown."
-  ),
-  paste0(
-    "Majority GA was the largest of AMR, AFR, EUR, SAS, and EAS. Shannon entropy was calculated ",
-    "as -sum(p*log2(p)) and is reported in bits. `Multiple` required at least two nonmissing PRE ",
-    "selections; all others were labeled `Single/no multiple report`."
-  ),
-  paste0(
-    "Overall Cohen kappa used the five directly mapped categories (Hispanic/AMR, Black/AFR, ",
-    "White/EUR, SAS/SAS, EAS/EAS). Middle Eastern, Native American, and Other/Unknown were ",
-    "excluded because they do not have a one-to-one category in the five-component model. ",
-    "The kappa CI and entropy mean-difference/Cliff's-delta CIs use percentile bootstrap resampling."
-  ),
-  "",
-  "## Exact results",
-  "",
-  sprintf(
-    "- Cohort: n=%d; true-positive records n=%d; false-positive records n=%d.",
-    nrow(cohort),
-    count_value("Outcome", "True positive"),
-    count_value("Outcome", "False positive")
-  ),
-  sprintf(
-    "- PRE reporting: %d participants had multiple selections; %d had no multiple report. ",
-    count_value("PRE reporting status", "Multiple"),
-    count_value("PRE reporting status", "Single/no multiple report")
-  ),
-  paste0(
-    "- Assigned PRE counts: ",
-    paste(
-      sprintf(
-        "%s=%d",
-        sre_levels,
-        vapply(
-          sre_levels,
-          function(x) count_value("Assigned PRE", x),
-          numeric(1)
-        )
-      ),
-      collapse = "; "
-    ),
-    "."
-  ),
-  paste0(
-    "- Majority-GA counts: ",
-    paste(
-      sprintf(
-        "%s=%d",
-        ancestry_levels,
-        vapply(
-          ancestry_levels,
-          function(x) count_value("Majority genetic ancestry", x),
-          numeric(1)
-        )
-      ),
-      collapse = "; "
-    ),
-    "."
-  ),
-  sprintf(
-    paste0(
-      "- Five-category overall Cohen kappa: %.3f (bootstrap 95%% CI %.3f to %.3f; n=%d); ",
-      "observed agreement %.1f%%."
-    ),
-    kappa_result$kappa,
-    kappa_ci[1],
-    kappa_ci[2],
-    length(kappa_sre),
-    100 * kappa_result$observed
-  ),
-  sprintf(
-    paste0(
-      "- Entropy: single/no-multiple-report mean %.3f bits (SD %.3f; n=%d) versus ",
-      "multiple-report mean %.3f bits (SD %.3f; n=%d). Mean difference %.3f bits ",
-      "(bootstrap 95%% CI %.3f to %.3f); Cliff's delta %.3f (95%% CI %.3f to %.3f); ",
-      "Wilcoxon p=%s."
-    ),
-    mean(entropy_single), sd(entropy_single), length(entropy_single),
-    mean(entropy_multiple), sd(entropy_multiple), length(entropy_multiple),
-    entropy_mean_difference, entropy_mean_ci[1], entropy_mean_ci[2],
-    entropy_cliffs_delta, entropy_delta_ci[1], entropy_delta_ci[2],
-    format_p_value(entropy_wilcox$p.value)
-  ),
-  "",
-  "## Important caveats",
-  "",
-  paste0(
-    "- Three records had no nonmissing first PRE selection. They are assigned Other/Unknown and are ",
-    "included in `Single/no multiple report` because no second selection was present."
-  ),
-  paste0(
-    "- AMR is an ADMIXTURE component label and should not be treated as equivalent to a social or ",
-    "tribal identity. PRE and genetic ancestry remain distinct constructs."
-  ),
-  paste0(
-    "- Upstream ADMIXTURE command lines, seeds, SNP-list provenance, and supervised population files ",
-    "are not present locally. The figures are reproducible from the saved Q/FAM/metadata inputs, but ",
-    "the full ancestry-inference pipeline is not yet reproducible."
-  ),
-  paste0(
-    "- Figures 1 and 4 contain anonymous individual ancestry profiles. Their source tables contain no ",
-    "sample IDs but remain restricted internal artifacts pending data-governance review."
-  ),
-  "",
-  "## Figure files",
-  "",
-  sprintf("- Figure 1: `%s` and `%s`", basename(figure1_paths[["pdf"]]), basename(figure1_paths[["png"]])),
-  sprintf("- Figure 2: `%s` and `%s`", basename(figure2_paths[["pdf"]]), basename(figure2_paths[["png"]])),
-  sprintf("- Figure 3: `%s` and `%s`", basename(figure3_paths[["pdf"]]), basename(figure3_paths[["png"]])),
-  sprintf("- Figure 4: `%s` and `%s`", basename(figure4_paths[["pdf"]]), basename(figure4_paths[["png"]])),
-  "",
-  "All PNG files were generated at 300 dpi; PDFs are vector outputs. Exact source-table mappings are in `tables/figure_source_manifest.csv`."
-)
-writeLines(report_lines, file.path(analysis_dir, "analysis_report.md"))
-
 # Privacy guard: no output table may contain source sample identifiers.
 output_tables <- list.files(table_dir, pattern = "\\.csv$", full.names = TRUE)
 for (table_path in output_tables) {
@@ -1276,5 +1088,4 @@ for (table_path in output_tables) {
 }
 
 message("Descriptive analysis complete.")
-message("Analysis report: ", file.path(analysis_dir, "analysis_report.md"))
 message("Figures: ", figure_dir)

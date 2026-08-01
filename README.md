@@ -1,68 +1,95 @@
 # Newborn screening and genetic ancestry analysis
 
-This repository contains the R code used to compare parent-reported ethnicity
-(PRE) with genetically inferred ancestry (GIA) in newborn-screening referrals.
-It also contains the MMA random-forest analysis reported in the manuscript.
-Participant data and individual-level results are not included.
+R code for the manuscript analyses comparing parent-reported ethnicity (PRE)
+with genetically inferred ancestry (GIA) in newborn-screening referrals. The
+repository includes the descriptive analyses, cohort tables, random-forest
+models, model checks, and code for Figures 1–4. Participant data and generated
+results are not included.
 
-The analyses cover:
-
-1. PRE-GIA concordance in 378 sequenced screen-positive newborns.
-2. Cohort characteristics and Figures 1 and 2.
-3. Random-forest models in 117 MMA screen-positive newborns after excluding
-   newborns receiving total parenteral nutrition (TPN).
-4. Model validation and Figures 3 and 4.
-
-## Project layout
+## Repository structure
 
 ```text
-analysis/   Scripts run in manuscript order
-R/          Shared data, statistics, plotting, and path helpers
-config/     Input-file and software-version records
-data/raw/   Local input data (ignored by Git)
-docs/       Workflow and data-release notes
-resources/  Figure layout template
-results/    Generated files (ignored by Git)
-run_all.R   Pipeline entry point
+analysis/   Numbered analysis and figure scripts
+R/          Shared data-processing, statistical, and plotting functions
+resources/  Figure 1 layout template
+run_all.R   Runs the complete pipeline
 ```
-
-The role of each numbered script is listed in
-[`docs/ANALYSIS_MAP.md`](docs/ANALYSIS_MAP.md).
 
 ## Requirements
 
-The manuscript analysis used R 4.5.1. Package versions are recorded in
-[`config/software_versions.csv`](config/software_versions.csv), and the required
-packages are listed in [`DESCRIPTION`](DESCRIPTION).
+The analysis was run with R 4.5.1 and the following packages:
 
-Place the six input files listed in
-[`config/input_manifest.csv`](config/input_manifest.csv) in `data/raw/`. To keep
-the data elsewhere, set:
+```r
+install.packages(c(
+  "data.table", "dplyr", "ggplot2", "patchwork", "pROC",
+  "ragg", "randomForest", "readxl", "scales", "tidyr"
+))
+```
+
+Figure 1 also requires `pdflatex` and `pdftoppm` (from Poppler) on the system
+path.
+
+## Input data
+
+Create `data/raw/` and place the following six files in it:
+
+| File | Use |
+| --- | --- |
+| `Scharfelab-NBS1474samples-250207.xlsx` | Newborn-screening phenotypes and metabolite measurements |
+| `1000G_378.5.Q` | GIA proportions for the joint reference/study analysis |
+| `1000G_378.fam` | Sample order for the joint ancestry analysis |
+| `sample_pure.txt` | Reference samples used to identify the study cohort |
+| `all_phase3.psam` | 1000 Genomes population metadata |
+| `gwas_ld_pruned.5.Q` | GIA proportions for the reference-only analysis |
+
+The inputs can instead be stored elsewhere by setting `HGG_DATA_DIR`:
 
 ```sh
 export HGG_DATA_DIR="/secure/path/to/input/files"
 ```
 
-Commands below assume the repository root is the working directory.
+## Pipeline
+
+Run the complete analysis from the repository root:
 
 ```sh
-# Check file structure, R syntax, and privacy rules
-Rscript run_all.R --mode=check
-
-# Run all analyses in order
-Rscript run_all.R --mode=full
+Rscript run_all.R
 ```
 
-Results are written to `results/` unless `HGG_RESULTS_DIR` is set. The full model
-is the slowest step: it uses 100 repeated stratified 10-fold cross-validation
-runs, 1,000 trees per forest, and 2,000 subject-level bootstrap samples.
+The scripts run in this order:
 
-Within each training fold, the model ranks 40 metabolite candidates by the
-absolute distance of their univariate AUC from 0.5 and selects the top 10. FC and
-C3/C2 are included in this candidate set but are not forced into the model.
+| Step | Script | Purpose |
+| --- | --- | --- |
+| 1 | `analysis/00_descriptive_analysis.R` | Prepare the 378-newborn ancestry/PRE dataset and descriptive source tables |
+| 2 | `analysis/01_cohort_characteristics.R` | Generate cohort characteristics and exclusion summaries |
+| 3 | `analysis/02_figure1_pre_gia_concordance.R` | Plot PRE–GIA concordance and ancestry-threshold results (Figure 1) |
+| 4 | `analysis/03_figure2_entropy_multiple_pre.R` | Compare ancestry entropy for single versus multiple PRE and draw Figure 2 |
+| 5 | `analysis/04_mma_random_forest.R` | Fit the four MMA random-forest models and estimate performance and importance |
+| 6 | `analysis/05_validate_mma_random_forest.R` | Check cohort, folds, predictions, metrics, and figure-source tables |
+| 7 | `analysis/06_figure3_model_performance.R` | Draw model-performance and permutation-importance plots (Figure 3) |
+| 8 | `analysis/07_figure4_prediction_shifts.R` | Analyze individual prediction changes after adding GIA |
+| 9 | `analysis/08_figure4_plot.R` | Draw the final two-panel Figure 4 |
 
-## Data release
+Outputs are written to `results/`. Set `HGG_RESULTS_DIR` to use a different
+location:
 
-Raw data, fold assignments, subject-level predictions, and individual ancestry
-profiles must remain outside Git. See [`docs/PRIVACY.md`](docs/PRIVACY.md) before
-adding any generated result to the repository.
+```sh
+export HGG_RESULTS_DIR="/path/to/output"
+Rscript run_all.R
+```
+
+The MMA analysis contains 117 newborns after excluding newborns who received
+total parenteral nutrition. Within every training fold, 40 metabolite
+candidates—including FC and C3/C2—are ranked by their absolute univariate AUC
+distance from 0.5, and the top 10 are used in all four predictor sets. Model
+performance is estimated with 100 repeated stratified 10-fold cross-validation
+runs and 1,000 trees per forest. Primary AUCs use subject-mean out-of-fold
+predictions; confidence intervals use 2,000 outcome-stratified subject
+bootstraps. Predictor importance is the held-out change in Brier score after
+permutation, with PRE and GIA evaluated as grouped predictors.
+
+## Data privacy
+
+Raw data, subject-level ancestry, fold assignments, and individual predictions
+are ignored by Git and should not be committed. Review staged files before each
+push.

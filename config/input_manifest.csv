@@ -1,8 +1,0 @@
-input_role,filename,used_by,distribution_status
-phenotype_workbook,Scharfelab-NBS1474samples-250207.xlsx,"00,01,04,07",controlled_access_not_distributed
-joint_admixture_proportions,1000G_378.5.Q,"00,04,07",controlled_access_not_distributed
-joint_sample_order,1000G_378.fam,"00,01,04,07",controlled_access_not_distributed
-reference_selection,sample_pure.txt,"00,01",not_distributed_with_release
-reference_metadata,all_phase3.psam,"00,04,07",not_distributed_with_release
-reference_admixture_proportions,gwas_ld_pruned.5.Q,00,not_distributed_with_release
-

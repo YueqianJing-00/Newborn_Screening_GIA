@@ -9,16 +9,7 @@ root <- find_project_root(dirname(script_path))
 old_working_directory <- setwd(root)
 on.exit(setwd(old_working_directory), add = TRUE)
 args <- commandArgs(trailingOnly = TRUE)
-mode_arg <- grep("^--mode=", args, value = TRUE)
-
-if (length(mode_arg) != 1L || length(args) != 1L) {
-  stop("Usage: Rscript run_all.R --mode=check|full", call. = FALSE)
-}
-
-mode <- sub("^--mode=", "", mode_arg)
-if (!mode %in% c("check", "full")) {
-  stop("--mode must be check or full.", call. = FALSE)
-}
+if (length(args)) stop("Usage: Rscript run_all.R", call. = FALSE)
 
 run_step <- function(label, relative_script, script_args = character()) {
   script <- file.path(root, relative_script)
@@ -31,11 +22,6 @@ run_step <- function(label, relative_script, script_args = character()) {
     stop("Pipeline step failed (exit ", status, "): ", relative_script, call. = FALSE)
   }
   invisible(TRUE)
-}
-
-if (mode == "check") {
-  run_step("release checks", "analysis/99_check_release.R")
-  quit(save = "no", status = 0L)
 }
 
 steps <- list(

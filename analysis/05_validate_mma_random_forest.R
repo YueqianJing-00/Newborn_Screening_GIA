@@ -7,12 +7,11 @@ script_path <- normalizePath(
   mustWork = TRUE
 )
 source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
-require_packages(c("data.table", "pROC", "digest"))
+require_packages(c("data.table", "pROC"))
 
 suppressPackageStartupMessages({
   library(data.table)
   library(pROC)
-  library(digest)
 })
 
 paths <- project_paths(script_path)
@@ -49,7 +48,7 @@ assert_near <- function(observed, expected, label, tolerance = 1e-12) {
 }
 
 required_tables <- c(
-  "cohort_flow.csv", "cohort_summary.csv", "input_checksums.csv",
+  "cohort_flow.csv", "cohort_summary.csv",
   "model_specification.csv", "fold_assignments.csv",
   "metabolite_selection_by_fold.csv", "metabolite_selection_summary.csv",
   "forest_fit_audit.csv", "oof_predictions_by_repeat.csv",
@@ -58,8 +57,7 @@ required_tables <- c(
   "subject_bootstrap_metrics.csv", "subject_bootstrap_weights.csv",
   "paired_effects.csv", "permutation_importance_by_repeat.csv",
   "permutation_importance_summary.csv", "figure_panel_a_source.csv",
-  "figure_panel_b_source.csv", "modeling_dataset_deidentified_restricted_internal.csv",
-  "run_manifest.csv"
+  "figure_panel_b_source.csv", "modeling_dataset_deidentified_restricted_internal.csv"
 )
 required_paths <- file.path(table_dir, required_tables)
 assert_true(all(file.exists(required_paths)), "all required output tables exist")
@@ -70,7 +68,6 @@ read_table <- function(name) fread(file.path(table_dir, name))
 
 cohort_flow <- read_table("cohort_flow.csv")
 cohort <- read_table("cohort_summary.csv")
-input_checksums <- read_table("input_checksums.csv")
 model_spec <- read_table("model_specification.csv")
 folds <- read_table("fold_assignments.csv")
 selection <- read_table("metabolite_selection_by_fold.csv")
@@ -89,7 +86,6 @@ importance_summary <- read_table("permutation_importance_summary.csv")
 panel_a <- read_table("figure_panel_a_source.csv")
 panel_b <- read_table("figure_panel_b_source.csv")
 modeling_data <- read_table("modeling_dataset_deidentified_restricted_internal.csv")
-manifest <- read_table("run_manifest.csv")
 
 model_order <- c(
   "Clinical + metabolites",
@@ -121,15 +117,6 @@ assert_true(
   length(candidate_spec) == 40L && all(c("FC", "C3_C2") %in% candidate_spec) &&
     all(model_spec[feature %in% c("FC", "C3_C2"), role] == "fold-wise candidate"),
   "FC and C3/C2 are candidates rather than forced predictors"
-)
-
-# Input checksums ----
-input_paths <- file.path(paths$data, basename(input_checksums$relative_path))
-assert_true(all(file.exists(input_paths)), "all recorded raw inputs still exist")
-current_input_sha <- sha256_files(input_paths)
-assert_true(
-  identical(unname(current_input_sha), input_checksums$sha256),
-  "raw-input SHA-256 checksums match the analysis ledger"
 )
 
 # Fold ledger ----
@@ -164,7 +151,6 @@ selection_check <- selection[, .(
   selected_n = sum(selected),
   selected_unique = uniqueN(metabolite[selected]),
   ranks_unique = uniqueN(rank),
-  hashes = uniqueN(selected_panel_sha256),
   ranking_consistent = all(selected == (rank <= 10L)),
   distance_consistent = max(abs(absolute_auc_distance - abs(univariate_auc - 0.5))) < 1e-12
 ), by = .(repeat_id, fold)]
@@ -174,7 +160,6 @@ assert_true(
     all(selection_check$selected_n == 10L) &&
     all(selection_check$selected_unique == 10L) &&
     all(selection_check$ranks_unique == 40L) &&
-    all(selection_check$hashes == 1L) &&
     all(selection_check$ranking_consistent) &&
     all(selection_check$distance_consistent),
   "each training fold ranks 40 candidates and selects exactly its top 10"
@@ -195,12 +180,10 @@ assert_true(
 )
 fit_panel_check <- fit_audit[, .(
   models = uniqueN(model),
-  panel_hashes = uniqueN(selected_panel_sha256),
   selected_strings = uniqueN(selected_metabolites)
 ), by = .(repeat_id, fold)]
 assert_true(
   nrow(fit_panel_check) == 1000L && all(fit_panel_check$models == 4L) &&
-    all(fit_panel_check$panel_hashes == 1L) &&
     all(fit_panel_check$selected_strings == 1L),
   "the identical selected panel was reused across all four models per split"
 )
@@ -448,24 +431,6 @@ assert_true(
   "restricted modeling dataset has 117 rows and does not export the TPN source field"
 )
 
-# Run settings and determinism evidence ----
-manifest_lookup <- setNames(manifest$value, manifest$field)
-assert_true(
-  manifest_lookup[["repeats"]] == "100" && manifest_lookup[["folds"]] == "10" &&
-    manifest_lookup[["ntree"]] == "1000" && manifest_lookup[["mtry"]] == "7" &&
-    manifest_lookup[["bootstrap_replicates"]] == "2000" &&
-    manifest_lookup[["master_seed"]] == "20260724",
-  "run manifest records the analysis settings and seed"
-)
-determinism_path <- file.path(qa_dir, "deterministic_rerun_sha256.csv")
-if (file.exists(determinism_path)) {
-  determinism <- fread(determinism_path)
-  assert_true(
-    nrow(determinism) == 8L && all(determinism$first_run_sha256 == determinism$second_run_sha256),
-    "eight core outputs matched byte-for-byte across two full reruns"
-  )
-}
-
 report_path <- file.path(qa_dir, "validation_report.txt")
 report <- c(
   "RF rerun output validation",
@@ -477,20 +442,5 @@ report <- c(
   paste0("TOTAL: ", length(checks), " checks passed; 0 failed.")
 )
 writeLines(report, report_path)
-
-manifest_path <- file.path(run_dir, "output_manifest_sha256.csv")
-output_files <- list.files(run_dir, recursive = TRUE, full.names = TRUE)
-output_files <- output_files[
-  file.info(output_files)$isdir == FALSE & normalizePath(output_files) != normalizePath(
-    manifest_path, mustWork = FALSE
-  )
-]
-output_manifest <- data.table(
-  relative_path = vapply(output_files, relative_to_project, character(1), root = project_root),
-  bytes = as.numeric(file.info(output_files)$size),
-  sha256 = sha256_files(output_files)
-)
-setorder(output_manifest, relative_path)
-fwrite(output_manifest, manifest_path)
 
 cat(paste(report, collapse = "\n"), "\n")

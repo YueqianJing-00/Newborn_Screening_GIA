@@ -11,14 +11,13 @@ source(file.path(helper_dir, "project_setup.R"))
 source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))
 source(file.path(helper_dir, "statistical_helpers.R"))
-require_packages(c("data.table", "readxl", "ggplot2", "patchwork", "digest"))
+require_packages(c("data.table", "readxl", "ggplot2", "patchwork"))
 
 suppressPackageStartupMessages({
   library(data.table)
   library(readxl)
   library(ggplot2)
   library(patchwork)
-  library(digest)
 })
 
 parse_args <- function(args) {
@@ -67,19 +66,7 @@ input_dir <- paths$data
 run_dir <- file.path(analysis_dir, "runs", args$run_name)
 table_dir <- file.path(run_dir, "tables")
 figure_dir <- file.path(run_dir, "figures")
-text_dir <- file.path(run_dir, "text")
-log_dir <- file.path(run_dir, "logs")
-make_directories(table_dir, figure_dir, text_dir, log_dir)
-
-log_file <- file.path(log_dir, "run.log")
-log_con <- file(log_file, open = "wt")
-sink(log_con, type = "output", split = TRUE)
-sink(log_con, type = "message", append = TRUE)
-on.exit({
-  sink(type = "message")
-  sink(type = "output")
-  close(log_con)
-}, add = TRUE)
+make_directories(table_dir, figure_dir)
 
 cat("Figure 4 GIA case-pattern analysis\n")
 cat("Start time:", format(Sys.time(), tz = "America/New_York"), "\n")
@@ -103,18 +90,9 @@ input_files <- c(
   source_modeling_dataset = file.path(
     source_table_dir,
     "modeling_dataset_deidentified_restricted_internal.csv"
-  ),
-  source_run_manifest = file.path(source_table_dir, "run_manifest.csv")
+  )
 )
 require_files(input_files)
-
-input_checksums <- data.table(
-  input = names(input_files),
-  relative_path = vapply(input_files, rel_path, character(1)),
-  bytes = as.numeric(file.info(input_files)$size),
-  sha256 = sha256_files(input_files)
-)
-fwrite(input_checksums, file.path(table_dir, "input_checksums.csv"))
 
 numeric_clean <- function(x) suppressWarnings(as.numeric(as.character(x)))
 
@@ -738,53 +716,6 @@ summary_metrics <- data.table(
   )
 )
 fwrite(summary_metrics, file.path(table_dir, "case_pattern_key_metrics.csv"))
-
-run_manifest <- data.table(
-  field = c(
-    "analysis", "script", "source_rf_run", "run_timestamp", "R_version",
-    "cohort", "primary_comparison", "individual_benefit_definition",
-    "stability_definition", "operating_point", "subgroups", "bootstrap",
-    "privacy", "figure_pdf", "figure_png"
-  ),
-  value = c(
-    "Figure 4: incremental GIA case-pattern and operational reclassification analysis",
-    rel_path(script_path),
-    rel_path(source_run_dir),
-    format(Sys.time(), tz = "America/New_York"),
-    R.version.string,
-    "117 MMA screen-positive newborns after excluding newborns receiving TPN (85 TP, 32 FP)",
-    "Clinical/metabolite + PRE versus clinical/metabolite + PRE + continuous GIA",
-    "(2Y-1)*(p_both-p_pre) on subject-averaged OOF TP probabilities; positive moves toward the observed outcome",
-    "Proportion of 100 repeated CV runs with a positive correct-direction probability shift",
-    paste0(
-      "Most specific empirical threshold attaining sensitivity >=",
-      args$target_sensitivity,
-      ", selected separately for each model"
-    ),
-    paste(
-      "Outcome; single versus multiple PRE; mapped PRE-majority GIA concordance;",
-      paste0("largest GIA component >", args$confidence_cutoff, " versus <=", args$confidence_cutoff)
-    ),
-    paste0(args$bootstrap, " subject bootstrap replicates within each displayed outcome-stratum cell"),
-    "Publication figure is aggregate/anonymous; subject-level source is deidentified and marked restricted internal",
-    rel_path(pdf_path),
-    rel_path(png_path)
-  )
-)
-fwrite(run_manifest, file.path(table_dir, "run_manifest.csv"))
-capture.output(sessionInfo(), file = file.path(run_dir, "sessionInfo.txt"))
-
-output_files <- c(
-  list.files(table_dir, full.names = TRUE),
-  list.files(figure_dir, full.names = TRUE),
-  file.path(run_dir, "sessionInfo.txt")
-)
-output_manifest <- data.table(
-  relative_path = vapply(output_files, rel_path, character(1)),
-  bytes = as.numeric(file.info(output_files)$size),
-  sha256 = sha256_files(output_files)
-)
-fwrite(output_manifest, file.path(run_dir, "output_manifest.csv"))
 
 cat("\nKey metrics:\n")
 print(summary_metrics)

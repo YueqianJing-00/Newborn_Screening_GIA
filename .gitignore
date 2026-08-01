@@ -7,8 +7,7 @@
 renv/library/
 
 # Controlled-access inputs must never be committed.
-data/raw/**
-!data/raw/README.md
+data/raw/
 *.xlsx
 *.xls
 *.fam
@@ -18,10 +17,8 @@ data/raw/**
 *.RData
 *.rdata
 
-# Generated results are private by default. Curate aggregate files explicitly
-# only after disclosure/governance review.
-results/**
-!results/README.md
+# Generated results are private by default.
+results/
 
 # Defense in depth for participant-level or resampling outputs.
 **/*restricted_internal*
@@ -31,4 +28,3 @@ results/**
 **/modeling_dataset*.csv
 **/subject_bootstrap_weights.csv
 **/subject_level*.csv
-

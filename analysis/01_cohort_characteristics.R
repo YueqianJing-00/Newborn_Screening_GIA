@@ -8,11 +8,10 @@ helper_dir <- file.path(dirname(script_path), "..", "R")
 source(file.path(helper_dir, "project_setup.R"))
 source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))
-require_packages(c("data.table", "digest", "readxl"))
+require_packages(c("data.table", "readxl"))
 
 suppressPackageStartupMessages({
   library(data.table)
-  library(digest)
   library(readxl)
 })
 
@@ -33,19 +32,6 @@ input_files <- c(
   reference_selection = file.path(input_dir, "sample_pure.txt")
 )
 require_files(input_files)
-
-input_checksums <- data.frame(
-  input = names(input_files),
-  file = basename(input_files),
-  bytes = as.numeric(file.info(input_files)$size),
-  sha256 = sha256_files(input_files),
-  stringsAsFactors = FALSE
-)
-write.csv(
-  input_checksums,
-  file.path(table_dir, "input_checksums_sha256.csv"),
-  row.names = FALSE
-)
 
 phenotype <- read_excel(
   input_files[["phenotype_workbook"]],
@@ -429,70 +415,5 @@ write.csv(
   file.path(table_dir, "cohort_characteristics_stratified_table.csv"),
   row.names = FALSE
 )
-
-# Run records ----
-
-run_manifest <- data.frame(
-  item = c(
-    "run_date",
-    "cohort_n",
-    "join_method",
-    "pre_hierarchy",
-    "continuous_summary",
-    "percentage_denominator",
-    "tpn_missing_invalid_definition"
-  ),
-  value = c(
-    format(Sys.Date(), "%Y-%m-%d"),
-    "378",
-    "Validated sample-ID join with false-positive prefix normalization",
-    "Hispanic > Black > East Asian > South Asian > Middle Eastern > Native American > White; otherwise Other/Unknown",
-    "Median (interquartile range); screening year uses median (range)",
-    "N = 378 for categorical characteristics",
-    "Blank/NA or code 998"
-  ),
-  stringsAsFactors = FALSE
-)
-write.csv(
-  run_manifest,
-  file.path(table_dir, "cohort_characteristics_run_manifest.csv"),
-  row.names = FALSE
-)
-
-report_lines <- c(
-  "# Cohort characteristics table report",
-  "",
-  paste0("Run date: ", format(Sys.Date(), "%Y-%m-%d")),
-  "",
-  "## Source and cohort",
-  "",
-  paste0(
-    "The table was generated from the canonical phenotype workbook and the exact ",
-    "378 study IDs in the joint FAM file. Samples were joined by validated IDs; ",
-    "the historical false-positive prefix difference was normalized explicitly."
-  ),
-  "",
-  "## Summary decisions",
-  "",
-  "- Categorical values are n (%) using N = 378.",
-  "- Birth weight and age at blood collection are median (IQR) because age at collection is right-skewed.",
-  "- Available-case denominators are 375 for birth weight and 375 for age at blood collection.",
-  "- PRE uses the hierarchy described in the Methods.",
-  "- TPN missing/invalid combines blank or NA values with code 998; no raw values were changed.",
-  "- The stratified table reports percentages within the false-positive (n=143) and true-positive (n=235) columns.",
-  "- Gestational age was derived from GA_DAYS as completed weeks. Blank values and four records outside 140-315 days were classified as unknown/invalid.",
-  "- Age-at-collection bins are nonoverlapping: 12-23 hours and 24-48 hours.",
-  "- The exported source table contains aggregate values only and no sample identifiers.",
-  "",
-  "## Validation",
-  "",
-  "- Total cohort: 378; true positive: 235; false positive: 143.",
-  "- Multiple PRE selections: 52.",
-  "- PRE counts: Hispanic 205; White 83; East Asian 34; Black 23; Other/Unknown 14; Middle Eastern 9; South Asian 9; Native American 1.",
-  "- Gender: male 214; female 161; missing 3.",
-  "- TPN: no 303; yes 55; missing/invalid 20."
-)
-writeLines(report_lines, file.path(analysis_dir, "analysis_report.md"))
-capture.output(sessionInfo(), file = file.path(analysis_dir, "sessionInfo.txt"))
 
 cat("Wrote aggregate cohort table to", table_dir, "\n")

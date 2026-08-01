@@ -15,7 +15,7 @@ source(file.path(helper_dir, "statistical_helpers.R"))
 
 required_packages <- c(
   "data.table", "readxl", "randomForest", "pROC", "ggplot2",
-  "patchwork", "digest"
+  "patchwork"
 )
 require_packages(required_packages)
 
@@ -26,7 +26,6 @@ suppressPackageStartupMessages({
   library(pROC)
   library(ggplot2)
   library(patchwork)
-  library(digest)
 })
 
 parse_args <- function(args) {
@@ -99,18 +98,7 @@ args <- parse_args(commandArgs(trailingOnly = TRUE))
 run_dir <- file.path(analysis_dir, "runs", args$run_name)
 table_dir <- file.path(run_dir, "tables")
 figure_dir <- file.path(run_dir, "figures")
-log_dir <- file.path(run_dir, "logs")
-make_directories(table_dir, figure_dir, log_dir)
-
-log_file <- file.path(log_dir, "run.log")
-log_con <- file(log_file, open = "wt")
-sink(log_con, type = "output", split = TRUE)
-sink(log_con, type = "message", append = TRUE)
-on.exit({
-  sink(type = "message")
-  sink(type = "output")
-  close(log_con)
-}, add = TRUE)
+make_directories(table_dir, figure_dir)
 
 cat("MMA four-model analysis after excluding newborns receiving TPN\n")
 cat("Start time:", format(Sys.time(), tz = "America/New_York"), "\n")
@@ -131,14 +119,6 @@ require_files(input_files)
 rel_path <- function(path) {
   relative_to_project(path, project_root)
 }
-
-input_checksums <- data.table(
-  input = names(input_files),
-  relative_path = vapply(input_files, rel_path, character(1)),
-  bytes = as.numeric(file.info(input_files)$size),
-  sha256 = sha256_files(input_files)
-)
-fwrite(input_checksums, file.path(table_dir, "input_checksums.csv"))
 
 numeric_clean <- function(x) suppressWarnings(as.numeric(as.character(x)))
 
@@ -570,25 +550,19 @@ fit_one_repeat <- function(repeat_id) {
     }
     ranking <- rank_metabolites_in_training(train_index)
     selected_metabolites <- ranking[selected == TRUE]$metabolite
-    selection_hash <- digest::digest(
-      paste(selected_metabolites, collapse = "|"),
-      algo = "sha256",
-      serialize = FALSE
-    )
     ranking[, `:=`(
       repeat_id = repeat_id,
       fold = fold_id,
       n_train = length(train_index),
       train_tp = sum(y[train_index] == "TP"),
-      train_fp = sum(y[train_index] == "FP"),
-      selected_panel_sha256 = selection_hash
+      train_fp = sum(y[train_index] == "FP")
     )]
     setcolorder(
       ranking,
       c(
         "repeat_id", "fold", "n_train", "train_tp", "train_fp",
         "metabolite", "univariate_auc", "absolute_auc_distance",
-        "rank", "selected", "selected_panel_sha256"
+        "rank", "selected"
       )
     )
     selection_rows[[fold_id]] <- ranking
@@ -644,7 +618,6 @@ fit_one_repeat <- function(repeat_id) {
         n_test = length(test_index),
         predictors = ncol(x),
         selected_metabolites = paste(selected_metabolites, collapse = ";"),
-        selected_panel_sha256 = selection_hash,
         fit_seed = fit_seed,
         requested_ntree = args$ntree,
         fitted_ntree = random_forest$ntree,
@@ -841,10 +814,10 @@ if (any(fit_audit$predictors != expected_predictor_counts[fit_audit$model])) {
   stop("A forest used an unexpected number of predictors.")
 }
 panel_consistency <- fit_audit[, .(
-  panel_hashes = uniqueN(selected_panel_sha256),
+  selected_panels = uniqueN(selected_metabolites),
   model_count = uniqueN(model)
 ), by = .(repeat_id, fold)]
-if (any(panel_consistency$panel_hashes != 1L) ||
+if (any(panel_consistency$selected_panels != 1L) ||
     any(panel_consistency$model_count != length(model_order))) {
   stop("The selected metabolite panel was not shared by all four models.")
 }
@@ -1235,68 +1208,6 @@ pdf_path <- file.path(figure_dir, "mma_tpn0_four_model_performance_importance.pd
 png_path <- file.path(figure_dir, "mma_tpn0_four_model_performance_importance.png")
 ggsave(pdf_path, figure, width = 13.5, height = 7.4, device = cairo_pdf)
 ggsave(png_path, figure, width = 13.5, height = 7.4, dpi = 300, bg = "white")
-
-run_manifest <- data.table(
-  field = c(
-    "analysis", "script", "run_timestamp", "R_version", "repeats", "folds",
-    "ntree", "mtry", "metabolite_candidates", "metabolites_selected_per_fold",
-    "added_metabolite_candidates", "bootstrap_replicates", "cores", "master_seed", "cohort_n",
-    "tp", "fp", "TPN_policy", "PRE_hierarchy", "GIA_parameterization",
-    "models", "feature_selection", "shared_panel_policy", "performance_panel",
-    "GIA_importance_parameterization", "importance_method",
-    "uncertainty_method"
-  ),
-  value = c(
-    paste0(
-      "MMA four-model random-forest comparison after excluding newborns receiving TPN, with fold-wise metabolite selection and held-out permutation importance; GIA=",
-      args$gia_importance
-    ),
-    rel_path(script_path),
-    format(Sys.time(), tz = "America/New_York"),
-    R.version.string,
-    args$repeats,
-    args$folds,
-    args$ntree,
-    args$mtry,
-    ncol(metabolite_x),
-    args$top_metabolites,
-    "FC and derived C3/C2; eligible but not forced",
-    args$bootstrap,
-    args$cores,
-    args$seed,
-    nrow(model_data),
-    sum(y == "TP"),
-    sum(y == "FP"),
-    "Restrict to TPN_HYPERAL=0; TPN yes, blank/unknown, missing, and code 998 are excluded",
-    "Hispanic > Black > EAS > SAS > Middle Eastern > Native American > White; else Other/Unknown",
-    paste0(
-      paste(gia_features, collapse = "+"),
-      " continuous proportions; ",
-      args$gia_reference,
-      " is the implicit compositional reference"
-    ),
-    paste(model_order, collapse = " | "),
-    paste0(
-      "Within each training fold, rank all ", ncol(metabolite_x),
-      " candidates by abs(univariate AUC - 0.5), with fixed FP/TP direction and alphabetical tie-breaking; include the top ",
-      args$top_metabolites, "; held-out subjects are not used for selection"
-    ),
-    "The one training-fold-selected metabolite panel is reused unchanged across all four models for that repeat/fold",
-    "Repeat-level AUC and specificity at the most specific empirical threshold attaining sensitivity >=0.95",
-    args$gia_importance,
-    paste0(
-      "Full-model held-out permutation; individual clinical predictors, selected metabolites, grouped PRE indicators, and ",
-      if (args$gia_importance == "grouped") "grouped GIA proportions" else "individual GIA proportions",
-      "; importance is delta Brier score. Metabolites not selected in a fold receive zero pipeline-level contribution for that fold, and selection frequency is reported separately"
-    ),
-    paste0(
-      args$bootstrap,
-      " outcome-stratified subject bootstraps of subject-mean OOF predictions, paired across models; conditional on the cross-fitted predictions; repeated CV runs are not treated as independent observations"
-    )
-  )
-)
-fwrite(run_manifest, file.path(table_dir, "run_manifest.csv"))
-capture.output(sessionInfo(), file = file.path(run_dir, "sessionInfo.txt"))
 
 cat("\nCohort summary:\n")
 print(cohort_summary)

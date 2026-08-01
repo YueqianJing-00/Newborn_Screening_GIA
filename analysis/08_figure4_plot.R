@@ -7,13 +7,12 @@ script_path <- normalizePath(
   mustWork = TRUE
 )
 source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
-require_packages(c("data.table", "ggplot2", "patchwork", "digest"))
+require_packages(c("data.table", "ggplot2", "patchwork"))
 
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)
   library(patchwork)
-  library(digest)
 })
 
 parse_args <- function(args) {
@@ -43,21 +42,9 @@ source_tables <- file.path(source_run, "tables")
 run_dir <- file.path(paths$results, "figure4", args$run_name)
 table_dir <- file.path(run_dir, "tables")
 figure_dir <- file.path(run_dir, "figures")
-text_dir <- file.path(run_dir, "text")
-log_dir <- file.path(run_dir, "logs")
-make_directories(table_dir, figure_dir, text_dir, log_dir)
+make_directories(table_dir, figure_dir)
 
 # Prediction-shift sources ----
-
-log_file <- file.path(log_dir, "run.log")
-log_con <- file(log_file, open = "wt")
-sink(log_con, type = "output", split = TRUE)
-sink(log_con, type = "message", append = TRUE)
-on.exit({
-  sink(type = "message")
-  sink(type = "output")
-  close(log_con)
-}, add = TRUE)
 
 rel_path <- function(path) {
   relative_to_project(path, project_root)
@@ -68,14 +55,6 @@ source_files <- c(
   confidence = file.path(source_tables, "gia_confidence_score_shift_summary.csv")
 )
 require_files(source_files, "source file")
-
-input_manifest <- data.table(
-  input = names(source_files),
-  relative_path = vapply(source_files, rel_path, character(1)),
-  bytes = as.numeric(file.info(source_files)$size),
-  sha256 = sha256_files(source_files)
-)
-fwrite(input_manifest, file.path(table_dir, "input_checksums.csv"))
 
 subject <- fread(source_files[["subject"]])
 confidence <- fread(source_files[["confidence"]])
@@ -259,45 +238,6 @@ ggsave(
   compression = "lzw",
   bg = "white"
 )
-
-run_manifest <- data.table(
-  field = c(
-    "analysis", "script", "source_run", "run_timestamp", "figure_width_mm",
-    "figure_height_mm", "font", "base_font_size_pt", "minimum_line_width_mm",
-    "panel_labels", "color_palette", "pdf", "png", "tiff"
-  ),
-  value = c(
-    "Two-panel journal-style redraw of Figure 4 from the specified case-pattern analysis run",
-    rel_path(script_path),
-    rel_path(source_run),
-    format(Sys.time(), tz = "America/New_York"),
-    180,
-    78,
-    "Helvetica",
-    8,
-    0.36,
-    "Capital bold A and B",
-    "Color-blind-safe blue/vermillion with neutral greys; color paired with outcome labels and shapes",
-    rel_path(pdf_path),
-    rel_path(png_path),
-    rel_path(tiff_path)
-  )
-)
-fwrite(run_manifest, file.path(table_dir, "run_manifest.csv"))
-capture.output(sessionInfo(), file = file.path(run_dir, "sessionInfo.txt"))
-
-output_files <- c(
-  list.files(table_dir, full.names = TRUE),
-  list.files(figure_dir, full.names = TRUE),
-  list.files(text_dir, full.names = TRUE),
-  file.path(run_dir, "sessionInfo.txt")
-)
-output_manifest <- data.table(
-  relative_path = vapply(output_files, rel_path, character(1)),
-  bytes = as.numeric(file.info(output_files)$size),
-  sha256 = sha256_files(output_files)
-)
-fwrite(output_manifest, file.path(run_dir, "output_manifest.csv"))
 
 cat("Two-panel Figure 4 redraw complete\n")
 cat("PDF:", rel_path(pdf_path), "\n")

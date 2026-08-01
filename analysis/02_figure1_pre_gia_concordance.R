@@ -12,12 +12,11 @@ source(file.path(helper_dir, "project_setup.R"))
 source(file.path(helper_dir, "statistical_helpers.R"))
 
 required_packages <- c(
-  "digest", "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr"
+  "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr"
 )
 require_packages(required_packages)
 
 suppressPackageStartupMessages({
-  library(digest)
   library(dplyr)
   library(ggplot2)
   library(patchwork)
@@ -48,22 +47,6 @@ cohort_file <- file.path(
 )
 required_inputs <- c(cross_file, cohort_file)
 require_files(required_inputs, "source file")
-
-source_manifest <- data.frame(
-  role = c(
-    "aggregate PRE-by-largest-GIA source",
-    "restricted internal cohort admixture source"
-  ),
-  relative_path = vapply(required_inputs, rel_path, character(1)),
-  bytes = as.numeric(file.info(required_inputs)$size),
-  sha256 = sha256_files(required_inputs),
-  stringsAsFactors = FALSE
-)
-write.csv(
-  source_manifest,
-  file.path(table_dir, "source_input_manifest.csv"),
-  row.names = FALSE
-)
 
 cross_source_reference <- read.csv(cross_file, check.names = FALSE, stringsAsFactors = FALSE)
 cohort <- read.csv(cohort_file, check.names = FALSE, stringsAsFactors = FALSE)
@@ -586,73 +569,5 @@ if (!file.exists(combined_png)) {
 
 composition_stem <- tools::file_path_sans_ext(basename(composition_tex))
 unlink(file.path(figure_dir, paste0(composition_stem, c(".aux", ".log"))))
-
-manifest <- data.frame(
-  output = c(
-    basename(combined_pdf),
-    basename(combined_png),
-    paste0(unname(panel_stems), ".pdf"),
-    paste0(unname(panel_stems), ".png")
-  ),
-  role = c(
-    "combined five-panel vector figure in the Figure1.pdf reference layout",
-    "combined five-panel 300-dpi figure in the Figure1.pdf reference layout",
-    rep("individual vector panel", length(panel_list)),
-    rep("individual 300-dpi panel", length(panel_list))
-  ),
-  stringsAsFactors = FALSE
-)
-write.csv(manifest, file.path(table_dir, "figure_output_manifest.csv"), row.names = FALSE)
-
-report <- c(
-  "# Figure 1 PRE-GIA concordance reference-layout redraw",
-  "",
-  "This script builds the concordance panels from the descriptive source tables using the manuscript layout.",
-  "",
-  "## Panel order",
-  "",
-  "- A: Full-cohort individual continuous GIA profiles, grouped by PRE.",
-  "- B: Exact PRE-by-largest-component GIA counts for all individuals.",
-  paste0(
-    "- C: The same cross-classification restricted to individuals with largest-component GIA >70% (n = ",
-    sum(cohort$maximum_gia_proportion > 0.70, na.rm = TRUE), ")."
-  ),
-  "- D: Continuous analytically corresponding GIA proportions for five directly mapped PRE categories.",
-  "- E: Observed agreement and Cohen's kappa across largest-component GIA thresholds.",
-  "",
-  "## Layout",
-  "",
-  "The output uses a 16:9 canvas (13.333 x 7.5 inches). Panel bounding boxes are saved in tables/figure1_reference_layout_boxes.csv.",
-  "",
-  "## Interpretation guardrails",
-  "",
-  "The categorical cross-classifications use the largest estimated GIA component (argmax) for every individual, without creating a separate no-majority category.",
-  "",
-  "The >70% restriction changes the analyzed population by preferentially retaining individuals with less-admixed GIA profiles and is presented as a sensitivity analysis."
-)
-writeLines(report, file.path(analysis_dir, "README.md"))
-capture.output(sessionInfo(), file = file.path(analysis_dir, "sessionInfo.txt"))
-
-output_files <- unique(c(
-  script_path,
-  composition_tex,
-  list.files(figure_dir, full.names = TRUE),
-  list.files(table_dir, full.names = TRUE),
-  file.path(analysis_dir, "README.md"),
-  file.path(analysis_dir, "run_manifest.md"),
-  file.path(analysis_dir, "sessionInfo.txt")
-))
-output_files <- output_files[file.exists(output_files)]
-output_manifest <- data.frame(
-  relative_path = vapply(output_files, rel_path, character(1)),
-  bytes = as.numeric(file.info(output_files)$size),
-  sha256 = sha256_files(output_files),
-  stringsAsFactors = FALSE
-)
-write.csv(
-  output_manifest,
-  file.path(analysis_dir, "output_manifest_sha256.csv"),
-  row.names = FALSE
-)
 
 message("Wrote combined figure: ", combined_png)

@@ -7,13 +7,12 @@ script_path <- normalizePath(
   mustWork = TRUE
 )
 source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
-require_packages(c("data.table", "ggplot2", "patchwork", "digest"))
+require_packages(c("data.table", "ggplot2", "patchwork"))
 
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)
   library(patchwork)
-  library(digest)
 })
 
 paths <- project_paths(script_path)
@@ -40,8 +39,7 @@ required_tables <- c(
   paired_effects = "paired_effects.csv",
   importance_summary = "permutation_importance_summary.csv",
   metabolite_selection = "metabolite_selection_summary.csv",
-  cohort_summary = "cohort_summary.csv",
-  run_manifest = "run_manifest.csv"
+  cohort_summary = "cohort_summary.csv"
 )
 required_paths <- setNames(file.path(source_table_dir, required_tables), names(required_tables))
 if (any(!file.exists(required_paths))) {
@@ -50,14 +48,6 @@ if (any(!file.exists(required_paths))) {
     paste(rel_path(required_paths[!file.exists(required_paths)]), collapse = ", ")
   )
 }
-
-input_checksums <- data.table(
-  source_table = names(required_paths),
-  relative_path = vapply(required_paths, rel_path, character(1)),
-  bytes = as.numeric(file.info(required_paths)$size),
-  sha256 = sha256_files(required_paths)
-)
-fwrite(input_checksums, file.path(output_table_dir, "source_table_checksums.csv"))
 
 performance_plot_source <- fread(required_paths[["panel_a"]])
 importance_plot_source <- fread(required_paths[["panel_b"]])
@@ -236,53 +226,6 @@ ggsave(panel_b_png, panel_b, width = 11.5, height = 6.1, dpi = 300, bg = "white"
 fwrite(primary_performance, file.path(output_table_dir, "primary_performance.csv"))
 fwrite(paired_effects, file.path(output_table_dir, "paired_effects.csv"))
 fwrite(importance_summary, file.path(output_table_dir, "permutation_importance_summary.csv"))
-
-plot_manifest <- data.table(
-  field = c(
-    "analysis", "source_analysis", "cohort", "metabolite_selection",
-    "added_candidates", "panel_A_orientation", "panel_A_geometry",
-    "panel_A_full_model_label", "panel_B", "layout", "panel_labels"
-  ),
-  value = c(
-    "Publication Figure 3 for the four-model RF comparison",
-    rel_path(source_analysis_dir),
-    "117 MMA screen-positive newborns after excluding those receiving TPN (85 TP, 32 FP)",
-    "Within each training fold, select 10 of 40 metabolite candidates by abs(univariate AUC - 0.5); use the same panel for all four models",
-    "FC and derived C3/C2 were candidates and were not forced",
-    "Models on x-axis and performance estimate on y-axis; AUC and specificity displayed as horizontal facets",
-    "Boxplots only",
-    "Both",
-    "AFR, AMR, EAS, and EUR jointly permuted as one GIA block; PRE indicators jointly permuted as one block",
-    "Vertical: panel A above panel B",
-    "A and B"
-  )
-)
-fwrite(plot_manifest, file.path(output_table_dir, "plot_manifest.csv"))
-
-session_info_path <- file.path(analysis_dir, "sessionInfo.txt")
-capture.output(sessionInfo(), file = session_info_path)
-
-analysis_documents <- file.path(
-  analysis_dir,
-  c("methods_draft.md", "figure_caption.md", "results_draft.md", "run_manifest.md")
-)
-output_files <- c(
-  script_path,
-  figure_pdf,
-  figure_png,
-  panel_b_pdf,
-  panel_b_png,
-  list.files(output_table_dir, full.names = TRUE),
-  analysis_documents,
-  session_info_path
-)
-output_files <- output_files[file.exists(output_files)]
-output_manifest <- data.table(
-  relative_path = vapply(output_files, rel_path, character(1)),
-  bytes = as.numeric(file.info(output_files)$size),
-  sha256 = sha256_files(output_files)
-)
-fwrite(output_manifest, file.path(analysis_dir, "output_manifest_sha256.csv"))
 
 cat("Figure 3 PDF:", rel_path(figure_pdf), "\n")
 cat("Figure 3 PNG:", rel_path(figure_png), "\n")
