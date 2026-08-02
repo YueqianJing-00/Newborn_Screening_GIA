@@ -11,8 +11,6 @@ results are not included.
 ```text
 analysis/   Numbered analysis and figure scripts
 R/          Shared data-processing, statistical, and plotting functions
-resources/  Figure 1 layout template
-run_all.R   Runs the complete pipeline
 ```
 
 ## Requirements
@@ -25,9 +23,6 @@ install.packages(c(
   "ragg", "randomForest", "readxl", "scales", "tidyr"
 ))
 ```
-
-Figure 1 also requires `pdflatex` and `pdftoppm` (from Poppler) on the system
-path.
 
 ## Input data
 
@@ -50,10 +45,18 @@ export HGG_DATA_DIR="/secure/path/to/input/files"
 
 ## Pipeline
 
-Run the complete analysis from the repository root:
+Run the scripts from the repository root in the order listed below:
 
 ```sh
-Rscript run_all.R
+Rscript analysis/00_descriptive_analysis.R
+Rscript analysis/01_cohort_characteristics.R
+Rscript analysis/02_figure1_pre_gia_concordance.R
+Rscript analysis/03_figure2_entropy_multiple_pre.R
+Rscript analysis/04_mma_random_forest.R
+Rscript analysis/05_validate_mma_random_forest.R
+Rscript analysis/06_figure3_model_performance.R
+Rscript analysis/07_figure4_prediction_shifts.R
+Rscript analysis/08_figure4_plot.R
 ```
 
 The scripts run in this order:
@@ -75,7 +78,6 @@ location:
 
 ```sh
 export HGG_RESULTS_DIR="/path/to/output"
-Rscript run_all.R
 ```
 
 The MMA analysis contains 117 newborns after excluding newborns who received

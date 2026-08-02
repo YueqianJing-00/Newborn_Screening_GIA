@@ -11,7 +11,7 @@ current_script <- function() {
 find_project_root <- function(start = getwd()) {
   path <- normalizePath(start, mustWork = TRUE)
   repeat {
-    is_project <- file.exists(file.path(path, "run_all.R")) &&
+    is_project <- file.exists(file.path(path, "README.md")) &&
       dir.exists(file.path(path, "analysis")) &&
       dir.exists(file.path(path, "R"))
     if (is_project) return(path)

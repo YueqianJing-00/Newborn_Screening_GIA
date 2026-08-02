@@ -26,7 +26,6 @@ suppressPackageStartupMessages({
 profiles_only <- "--profiles-only" %in% commandArgs(trailingOnly = TRUE)
 
 paths <- project_paths(script_path)
-project_root <- paths$root
 analysis_dir <- file.path(paths$results, "figure1")
 source_dir <- file.path(paths$results, "descriptive", "tables")
 figure_dir <- file.path(analysis_dir, "figures")
@@ -34,10 +33,6 @@ table_dir <- file.path(analysis_dir, "tables")
 make_directories(figure_dir, table_dir)
 
 # Source tables ----
-
-rel_path <- function(path) {
-  relative_to_project(path, project_root)
-}
 
 cross_file <- file.path(source_dir, "figure2_sre_majority_ga_source.csv")
 cohort_file <- file.path(
@@ -502,71 +497,64 @@ combined_png <- file.path(
   figure_dir,
   "Figure1_PRE_GIA_concordance.png"
 )
-composition_tex <- file.path(
-  analysis_dir,
-  "Figure1_PRE_GIA_concordance.tex"
-)
-composition_template <- file.path(project_root, "resources", "figure1_layout.tex.in")
-if (!file.exists(composition_template)) {
-  stop("Missing vector-composition template: ", rel_path(composition_template))
-}
-composition_lines <- readLines(composition_template, warn = FALSE)
-composition_lines <- gsub(
-  "@@FIGURE_DIR@@",
-  normalizePath(figure_dir, mustWork = TRUE),
-  composition_lines,
-  fixed = TRUE
-)
-writeLines(composition_lines, composition_tex)
 
-pdflatex_command <- Sys.which("pdflatex")
-pdftoppm_command <- Sys.which("pdftoppm")
-if (!nzchar(pdflatex_command) || !nzchar(pdftoppm_command)) {
-  stop("The redraw requires pdflatex and pdftoppm on PATH.")
-}
-
-old_working_directory <- getwd()
-setwd(project_root)
-latex_output <- system2(
-  pdflatex_command,
-  args = c(
-    "-interaction=nonstopmode",
-    "-halt-on-error",
-    paste0("-output-directory=", shQuote(figure_dir)),
-    shQuote(composition_tex)
-  ),
-  stdout = TRUE,
-  stderr = TRUE
+layout_plots <- c(
+  A = "profiles",
+  B = "all_cross",
+  C = "gt70_cross",
+  D = "continuous",
+  E = "threshold"
 )
-setwd(old_working_directory)
-latex_status <- attr(latex_output, "status")
-if (!is.null(latex_status) && latex_status != 0L) {
-  stop("Vector composition failed:\n", paste(latex_output, collapse = "\n"))
-}
-if (!file.exists(combined_pdf)) {
-  stop("Vector composition completed without producing the expected PDF.")
+label_positions <- data.frame(
+  panel = names(layout_plots),
+  x = c(7.2, 690.7444, 7.2, 296.325, 630.9131) / 960,
+  y = c(518, 518, 241, 245, 245) / 540
+)
+
+draw_combined_figure <- function() {
+  grid::grid.newpage()
+  for (index in seq_len(nrow(layout_boxes))) {
+    box <- layout_boxes[index, ]
+    print(
+      panel_list[[layout_plots[[box$panel]]]],
+      newpage = FALSE,
+      vp = grid::viewport(
+        x = box$x + box$width / 2,
+        y = box$y + box$height / 2,
+        width = box$width,
+        height = box$height
+      )
+    )
+  }
+  grid::grid.text(
+    label_positions$panel,
+    x = grid::unit(label_positions$x, "npc"),
+    y = grid::unit(label_positions$y, "npc"),
+    just = c("left", "bottom"),
+    gp = grid::gpar(fontsize = 18, fontfamily = "Helvetica")
+  )
 }
 
-png_prefix <- sub("\\.png$", "", combined_png)
-render_output <- system2(
-  pdftoppm_command,
-  args = c(
-    "-png", "-r", "300", "-singlefile",
-    shQuote(combined_pdf),
-    shQuote(png_prefix)
-  ),
-  stdout = TRUE,
-  stderr = TRUE
+figure_width <- 960 / 72
+figure_height <- 540 / 72
+grDevices::cairo_pdf(
+  combined_pdf,
+  width = figure_width,
+  height = figure_height,
+  bg = "white"
 )
-render_status <- attr(render_output, "status")
-if (!is.null(render_status) && render_status != 0L) {
-  stop("PNG rendering failed:\n", paste(render_output, collapse = "\n"))
-}
-if (!file.exists(combined_png)) {
-  stop("PDF rendering completed without producing the expected PNG.")
-}
+draw_combined_figure()
+invisible(grDevices::dev.off())
 
-composition_stem <- tools::file_path_sans_ext(basename(composition_tex))
-unlink(file.path(figure_dir, paste0(composition_stem, c(".aux", ".log"))))
+ragg::agg_png(
+  combined_png,
+  width = figure_width,
+  height = figure_height,
+  units = "in",
+  res = 300,
+  background = "white"
+)
+draw_combined_figure()
+invisible(grDevices::dev.off())
 
 message("Wrote combined figure: ", combined_png)
