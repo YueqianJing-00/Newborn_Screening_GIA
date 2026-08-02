@@ -12,13 +12,12 @@ source(file.path(helper_dir, "project_setup.R"))
 source(file.path(helper_dir, "statistical_helpers.R"))
 
 require_packages(c(
-  "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr"
+  "dplyr", "ggplot2", "ragg", "scales", "tidyr"
 ))
 
 suppressPackageStartupMessages({
   library(dplyr)
   library(ggplot2)
-  library(patchwork)
   library(scales)
   library(tidyr)
 })
@@ -409,7 +408,7 @@ panel_f <- ggplot(
   theme_manuscript(8.7) +
   theme(legend.position = "bottom")
 
-# Save individual plots for flexible manuscript assembly.
+# Save Figure 1 subfigures.
 panel_list <- list(
   all_cross = panel_all,
   gt70_cross = panel_gt70,
@@ -454,107 +453,4 @@ if (profiles_only) {
   quit(save = "no", status = 0)
 }
 
-# Assemble the manuscript layout ----
-
-# Panel positions follow the manuscript figure layout.
-# PowerPoint slide coordinates are English Metric Units (EMU) on a
-# 12,192,000 x 6,858,000 canvas. Converting them to normalized coordinates
-# preserves the aspect ratio of every original vector panel.
-slide_width_emu <- 12192000
-slide_height_emu <- 6858000
-layout_boxes <- data.frame(
-  panel = c("A", "B", "C", "D", "E"),
-  content = c(
-    "Individual GIA profiles",
-    "PRE-by-largest-GIA counts, all individuals",
-    "PRE-by-largest-GIA counts, >70% subset",
-    "Corresponding continuous GIA proportions",
-    "Agreement across largest-component thresholds"
-  ),
-  x_emu = c(0, 8681014, 0, 3671888, 8044628),
-  y_from_top_emu = c(307118, 307118, 3723833, 3723833, 3723833),
-  width_emu = c(8681014, 3456544, 3671888, 4416183, 4147372),
-  height_emu = c(3175000, 2855807, 3033726, 3033726, 3033726),
-  stringsAsFactors = FALSE
-) %>%
-  mutate(
-    x = x_emu / slide_width_emu,
-    y = 1 - (y_from_top_emu + height_emu) / slide_height_emu,
-    width = width_emu / slide_width_emu,
-    height = height_emu / slide_height_emu
-  )
-write.csv(
-  layout_boxes,
-  file.path(table_dir, "figure1_reference_layout_boxes.csv"),
-  row.names = FALSE
-)
-
-combined_pdf <- file.path(
-  figure_dir,
-  "Figure1_PRE_GIA_concordance.pdf"
-)
-combined_png <- file.path(
-  figure_dir,
-  "Figure1_PRE_GIA_concordance.png"
-)
-
-layout_plots <- c(
-  A = "profiles",
-  B = "all_cross",
-  C = "gt70_cross",
-  D = "continuous",
-  E = "threshold"
-)
-label_positions <- data.frame(
-  panel = names(layout_plots),
-  x = c(7.2, 690.7444, 7.2, 296.325, 630.9131) / 960,
-  y = c(518, 518, 241, 245, 245) / 540
-)
-
-draw_combined_figure <- function() {
-  grid::grid.newpage()
-  for (index in seq_len(nrow(layout_boxes))) {
-    box <- layout_boxes[index, ]
-    print(
-      panel_list[[layout_plots[[box$panel]]]],
-      newpage = FALSE,
-      vp = grid::viewport(
-        x = box$x + box$width / 2,
-        y = box$y + box$height / 2,
-        width = box$width,
-        height = box$height
-      )
-    )
-  }
-  grid::grid.text(
-    label_positions$panel,
-    x = grid::unit(label_positions$x, "npc"),
-    y = grid::unit(label_positions$y, "npc"),
-    just = c("left", "bottom"),
-    gp = grid::gpar(fontsize = 18, fontfamily = "Helvetica")
-  )
-}
-
-figure_width <- 960 / 72
-figure_height <- 540 / 72
-grDevices::cairo_pdf(
-  combined_pdf,
-  width = figure_width,
-  height = figure_height,
-  bg = "white"
-)
-draw_combined_figure()
-invisible(grDevices::dev.off())
-
-ragg::agg_png(
-  combined_png,
-  width = figure_width,
-  height = figure_height,
-  units = "in",
-  res = 300,
-  background = "white"
-)
-draw_combined_figure()
-invisible(grDevices::dev.off())
-
-message("Wrote combined figure: ", combined_png)
+message("Wrote Figure 1 subfigures: ", figure_dir)

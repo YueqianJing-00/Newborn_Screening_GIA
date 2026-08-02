@@ -65,13 +65,15 @@ The scripts run in this order:
 | --- | --- | --- |
 | 1 | `analysis/00_descriptive_analysis.R` | Prepare the 378-newborn ancestry/PRE dataset and descriptive source tables |
 | 2 | `analysis/01_cohort_characteristics.R` | Generate cohort characteristics and exclusion summaries |
-| 3 | `analysis/02_figure1_pre_gia_concordance.R` | Plot PRE–GIA concordance and ancestry-threshold results (Figure 1) |
+| 3 | `analysis/02_figure1_pre_gia_concordance.R` | Generate the PRE–GIA concordance and ancestry-threshold subfigures for Figure 1 |
 | 4 | `analysis/03_figure2_entropy_multiple_pre.R` | Compare ancestry entropy for single versus multiple PRE and draw Figure 2 |
 | 5 | `analysis/04_mma_random_forest.R` | Fit the four MMA random-forest models and estimate performance and importance |
 | 6 | `analysis/05_validate_mma_random_forest.R` | Check cohort, folds, predictions, metrics, and figure-source tables |
 | 7 | `analysis/06_figure3_model_performance.R` | Draw model-performance and permutation-importance plots (Figure 3) |
 | 8 | `analysis/07_figure4_prediction_shifts.R` | Analyze individual prediction changes after adding GIA |
 | 9 | `analysis/08_figure4_plot.R` | Draw the final two-panel Figure 4 |
+
+The Figure 1 script saves each subfigure separately in PDF and PNG formats.
 
 Outputs are written to `results/`. Set `HGG_RESULTS_DIR` to use a different
 location:
