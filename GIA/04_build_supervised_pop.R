@@ -1,25 +1,9 @@
 #!/usr/bin/env Rscript
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 3L) {
-  stop(
-    "Usage: 04_build_supervised_pop.R JOINT.fam REFERENCE.labels.tsv OUTPUT.pop",
-    call. = FALSE
-  )
-}
-
 fam_path <- args[[1L]]
 labels_path <- args[[2L]]
 output_path <- args[[3L]]
-
-input_paths <- c(fam_path, labels_path)
-missing_paths <- input_paths[!file.exists(input_paths)]
-if (length(missing_paths)) {
-  stop(
-    paste("Missing input file(s):", paste(missing_paths, collapse = ", ")),
-    call. = FALSE
-  )
-}
 
 fam <- read.table(
   fam_path,

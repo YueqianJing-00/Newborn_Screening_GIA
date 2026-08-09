@@ -4,7 +4,7 @@ These scripts generate the global-ancestry files used by the manuscript analyses
 
 ## Software
 
-The historical analyses used PLINK 1.90b6.21, PLINK 2.00a3.7LM, and ADMIXTURE 1.3.0. R runs the reference-selection and sample-order checks.
+The historical analyses used PLINK 1.90b6.21, PLINK 2.00a3.7LM, and ADMIXTURE 1.3.0. Install these programs and R before running the workflow. The scripts assume that the configured input files are ready and do not perform software or file preflight checks.
 
 Copy the example configuration and edit the paths:
 
@@ -14,8 +14,6 @@ set -a
 source GIA/config.env
 set +a
 ```
-
-Set `DRY_RUN=1` to print genomics commands without reading inputs or writing outputs.
 
 ## Global ancestry
 

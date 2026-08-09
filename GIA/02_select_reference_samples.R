@@ -1,34 +1,11 @@
 #!/usr/bin/env Rscript
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 4L || length(args) > 5L) {
-  stop(
-    paste(
-      "Usage: 02_select_reference_samples.R",
-      "REFERENCE.Q REFERENCE.fam REFERENCE.psam OUTPUT_PREFIX [THRESHOLD]"
-    ),
-    call. = FALSE
-  )
-}
-
 q_path <- args[[1L]]
 fam_path <- args[[2L]]
 psam_path <- args[[3L]]
 output_prefix <- args[[4L]]
 threshold <- if (length(args) == 5L) as.numeric(args[[5L]]) else 0.80
-
-if (!is.finite(threshold) || threshold < 0 || threshold >= 1) {
-  stop("THRESHOLD must be a number in [0, 1).", call. = FALSE)
-}
-
-input_paths <- c(q_path, fam_path, psam_path)
-missing_paths <- input_paths[!file.exists(input_paths)]
-if (length(missing_paths)) {
-  stop(
-    paste("Missing input file(s):", paste(missing_paths, collapse = ", ")),
-    call. = FALSE
-  )
-}
 
 q <- as.matrix(read.table(q_path, header = FALSE, check.names = FALSE))
 storage.mode(q) <- "double"
