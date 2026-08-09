@@ -31,14 +31,10 @@ LD_R2=${LD_R2:-0.2}
 
 if [[ $DRY_RUN != 1 ]]; then
   for required_command in "$PLINK" "$ADMIXTURE"; do
-    command -v "$required_command" >/dev/null 2>&1 || {
-      fail "required command not found: $required_command"
-    }
+    command -v "$required_command" >/dev/null 2>&1 || fail "required command not found: $required_command"
   done
   for extension in bed bim fam; do
-    [[ -f ${REFERENCE_BFILE}.${extension} ]] || {
-      fail "missing PLINK file: ${REFERENCE_BFILE}.${extension}"
-    }
+    [[ -f ${REFERENCE_BFILE}.${extension} ]] || fail "missing PLINK file: ${REFERENCE_BFILE}.${extension}"
   done
   mkdir -p "$WORK_DIR"
 fi

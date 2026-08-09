@@ -23,7 +23,7 @@ if (!is.finite(threshold) || threshold < 0 || threshold >= 1) {
 
 input_paths <- c(q_path, fam_path, psam_path)
 missing_paths <- input_paths[!file.exists(input_paths)]
-if (length(missing_paths) > 0L) {
+if (length(missing_paths)) {
   stop(
     paste("Missing input file(s):", paste(missing_paths, collapse = ", ")),
     call. = FALSE

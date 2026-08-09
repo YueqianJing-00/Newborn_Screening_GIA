@@ -12,10 +12,9 @@ fam_path <- args[[1L]]
 labels_path <- args[[2L]]
 output_path <- args[[3L]]
 
-missing_paths <- c(fam_path, labels_path)[
-  !file.exists(c(fam_path, labels_path))
-]
-if (length(missing_paths) > 0L) {
+input_paths <- c(fam_path, labels_path)
+missing_paths <- input_paths[!file.exists(input_paths)]
+if (length(missing_paths)) {
   stop(
     paste("Missing input file(s):", paste(missing_paths, collapse = ", ")),
     call. = FALSE
@@ -50,8 +49,9 @@ if (!all(labels$IID %in% fam[[2L]])) {
 }
 
 label_index <- match(as.character(fam[[2L]]), labels$IID)
+reference_rows <- !is.na(label_index)
 population <- rep("-", nrow(fam))
-population[!is.na(label_index)] <- labels$SuperPop[label_index[!is.na(label_index)]]
+population[reference_rows] <- labels$SuperPop[label_index[reference_rows]]
 
 if (!any(population == "-")) stop("Joint FAM contains no study samples.", call. = FALSE)
 if (sum(population != "-") != nrow(labels)) {

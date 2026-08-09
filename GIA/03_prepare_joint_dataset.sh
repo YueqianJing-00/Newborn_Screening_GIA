@@ -32,14 +32,10 @@ VARIANT_ID_TEMPLATE='@:#:$r:$a'
 
 if [[ $DRY_RUN != 1 ]]; then
   for required_command in "$PLINK" "$PLINK2"; do
-    command -v "$required_command" >/dev/null 2>&1 || {
-      fail "required command not found: $required_command"
-    }
+    command -v "$required_command" >/dev/null 2>&1 || fail "required command not found: $required_command"
   done
   for extension in bed bim fam; do
-    [[ -f ${REFERENCE_BFILE}.${extension} ]] || {
-      fail "missing PLINK file: ${REFERENCE_BFILE}.${extension}"
-    }
+    [[ -f ${REFERENCE_BFILE}.${extension} ]] || fail "missing PLINK file: ${REFERENCE_BFILE}.${extension}"
   done
   [[ -f $AIM_LIST ]] || fail "missing file: $AIM_LIST"
   [[ -f $REFERENCE_KEEP ]] || fail "missing file: $REFERENCE_KEEP"
@@ -47,9 +43,7 @@ if [[ $DRY_RUN != 1 ]]; then
     [[ -f $STUDY_VCF ]] || fail "missing file: $STUDY_VCF"
   else
     for extension in bed bim fam; do
-      [[ -f ${STUDY_BFILE}.${extension} ]] || {
-        fail "missing PLINK file: ${STUDY_BFILE}.${extension}"
-      }
+      [[ -f ${STUDY_BFILE}.${extension} ]] || fail "missing PLINK file: ${STUDY_BFILE}.${extension}"
     done
   fi
   mkdir -p "$WORK_DIR"
