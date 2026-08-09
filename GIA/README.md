@@ -9,9 +9,9 @@ The historical analyses used PLINK 1.90b6.21, PLINK 2.00a3.7LM, and ADMIXTURE 1.
 Copy the example configuration and edit the paths:
 
 ```bash
-cp workflow/config.example.env workflow/config.env
+cp GIA/config.example.env GIA/config.env
 set -a
-source workflow/config.env
+source GIA/config.env
 set +a
 ```
 
@@ -25,7 +25,7 @@ The reference workflow retains autosomal, strict biallelic A/C/G/T SNPs with MAF
 
 ```bash
 WORK_DIR="$GLOBAL_REFERENCE_WORK_DIR" \
-  bash workflow/01_prepare_1000g_reference.sh
+  bash GIA/01_prepare_1000g_reference.sh
 ```
 
 The historical run started with 2,504 Phase 3 samples and retained 768,584 LD-pruned variants.
@@ -35,7 +35,7 @@ The historical run started with 2,504 Phase 3 samples and retained 768,584 LD-pr
 The manuscript reference panel includes samples with a maximum unsupervised K=5 ancestry proportion greater than 0.80. The threshold selected 2,158 individuals.
 
 ```bash
-Rscript workflow/02_select_reference_samples.R \
+Rscript GIA/02_select_reference_samples.R \
   "$GLOBAL_REFERENCE_WORK_DIR/reference_ld_pruned.5.Q" \
   "$GLOBAL_REFERENCE_WORK_DIR/reference_ld_pruned.fam" \
   "$REFERENCE_PSAM" \
@@ -52,9 +52,9 @@ The historical joint analysis used 5,378 candidate ancestry-informative SNPs. Al
 ```bash
 REFERENCE_KEEP="$GLOBAL_REFERENCE_WORK_DIR/reference_selected.keep" \
 WORK_DIR="$GLOBAL_JOINT_WORK_DIR" \
-  bash workflow/03_prepare_joint_dataset.sh
+  bash GIA/03_prepare_joint_dataset.sh
 
-Rscript workflow/04_build_supervised_pop.R \
+Rscript GIA/04_build_supervised_pop.R \
   "$GLOBAL_JOINT_WORK_DIR/joint.fam" \
   "$GLOBAL_REFERENCE_WORK_DIR/reference_selected.labels.tsv" \
   "$GLOBAL_JOINT_WORK_DIR/joint.pop"
@@ -66,7 +66,7 @@ The harmonization script assigns `chromosome:position:reference:alternate` varia
 
 ```bash
 JOINT_BFILE="$GLOBAL_JOINT_WORK_DIR/joint" \
-  bash workflow/05_run_supervised_admixture.sh
+  bash GIA/05_run_supervised_admixture.sh
 ```
 
 ADMIXTURE reads the reference labels from `joint.pop` and estimates the five ancestry proportions for study rows marked with `-`. The historical run did not retain ADMIXTURE's terminal output. The saved `.pop`, FAM, and Q files support this supervised K=5 reconstruction.

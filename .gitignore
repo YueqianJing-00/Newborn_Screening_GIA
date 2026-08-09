@@ -30,8 +30,8 @@ results/
 **/subject_level*.csv
 
 # Genomics workflow inputs and generated files
-workflow/config.env
-workflow/work/
+GIA/config.env
+GIA/work/
 *.bed
 *.bim
 *.pgen

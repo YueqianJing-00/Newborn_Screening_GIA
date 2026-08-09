@@ -11,7 +11,7 @@ results are not included.
 ```text
 analysis/   Numbered analysis and figure scripts
 R/          Shared data-processing, statistical, and plotting functions
-workflow/   Upstream global-ancestry estimation code
+GIA/        Upstream global-ancestry estimation code
 ```
 
 ## Requirements
@@ -28,7 +28,7 @@ install.packages(c(
 ## Upstream ancestry estimation
 
 The manuscript scripts consume precomputed ADMIXTURE ancestry proportions. The
-code under [`workflow/`](workflow/) prepares the 1000 Genomes
+code under [`GIA/`](GIA/) prepares the 1000 Genomes
 reference, selects the reference panel, harmonizes reference and study
 genotypes, and estimates ancestry in study samples with supervised ADMIXTURE.
 Those workflows keep genotype data and participant-level outputs outside Git
