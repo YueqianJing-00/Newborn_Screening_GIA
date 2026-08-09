@@ -1,42 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PLINK=${PLINK:-plink}
-ADMIXTURE=${ADMIXTURE:-admixture}
-K=${K:-5}
-REFERENCE_MAF=${REFERENCE_MAF:-0.01}
-LD_WINDOW=${LD_WINDOW:-1000}
-LD_STEP=${LD_STEP:-100}
-LD_R2=${LD_R2:-0.2}
+reference_bfile=$1
+autosomal_prefix=$2
+prune_prefix=$3
+ld_pruned_prefix=$4
+reference_maf=$5
+ld_window=$6
+ld_step=$7
+ld_r2=$8
+k=$9
 
-mkdir -p "$WORK_DIR"
-
-autosomal_prefix="$WORK_DIR/reference_autosomal"
-prune_prefix="$WORK_DIR/reference_prune"
-ld_pruned_prefix="$WORK_DIR/reference_ld_pruned"
-
-"$PLINK" \
-  --bfile "$REFERENCE_BFILE" \
+plink \
+  --bfile "$reference_bfile" \
   --allow-extra-chr \
   --autosome \
   --biallelic-only strict \
   --snps-only just-acgt \
-  --maf "$REFERENCE_MAF" \
+  --maf "$reference_maf" \
   --make-bed \
   --out "$autosomal_prefix"
 
-"$PLINK" \
+plink \
   --bfile "$autosomal_prefix" \
-  --indep-pairwise "$LD_WINDOW" "$LD_STEP" "$LD_R2" \
+  --indep-pairwise "$ld_window" "$ld_step" "$ld_r2" \
   --out "$prune_prefix"
 
-"$PLINK" \
+plink \
   --bfile "$autosomal_prefix" \
   --extract "$prune_prefix.prune.in" \
   --make-bed \
   --out "$ld_pruned_prefix"
 
 (
-  cd "$WORK_DIR"
-  "$ADMIXTURE" "$(basename "$ld_pruned_prefix").bed" "$K"
+  cd "$(dirname "$ld_pruned_prefix")"
+  admixture "$(basename "$ld_pruned_prefix").bed" "$k"
 )

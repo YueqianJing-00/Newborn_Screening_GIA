@@ -42,8 +42,6 @@ if (sum(population != "-") != nrow(labels)) {
   stop("Reference label count does not match the joint FAM.", call. = FALSE)
 }
 
-output_dir <- dirname(output_path)
-if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 write.table(
   population,
   output_path,

@@ -4,8 +4,9 @@ args <- commandArgs(trailingOnly = TRUE)
 q_path <- args[[1L]]
 fam_path <- args[[2L]]
 psam_path <- args[[3L]]
-output_prefix <- args[[4L]]
-threshold <- if (length(args) == 5L) as.numeric(args[[5L]]) else 0.80
+keep_path <- args[[4L]]
+labels_path <- args[[5L]]
+threshold <- as.numeric(args[[6L]])
 
 q <- as.matrix(read.table(q_path, header = FALSE, check.names = FALSE))
 storage.mode(q) <- "double"
@@ -66,12 +67,9 @@ selected_rows <- selected_rows[selected_order]
 selected_labels <- selected_labels[selected_order, , drop = FALSE]
 selected_keep <- fam[selected_rows, 1:2, drop = FALSE]
 
-output_dir <- dirname(output_prefix)
-if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
-
 write.table(
   selected_keep,
-  paste0(output_prefix, ".keep"),
+  keep_path,
   sep = "\t",
   row.names = FALSE,
   col.names = FALSE,
@@ -79,7 +77,7 @@ write.table(
 )
 write.table(
   selected_labels,
-  paste0(output_prefix, ".labels.tsv"),
+  labels_path,
   sep = "\t",
   row.names = FALSE,
   col.names = FALSE,
