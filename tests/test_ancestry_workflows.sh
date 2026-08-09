@@ -14,6 +14,9 @@ assert_contains() {
   [[ $haystack == *"$needle"* ]] || fail "expected output to contain: $needle"
 }
 
+shared_shell_directory="$repo_root/workflow/ancestry/lib"
+[[ ! -d $shared_shell_directory ]] || fail "obsolete shared shell directory remains: $shared_shell_directory"
+
 reference_script="$repo_root/workflow/ancestry/global/01_prepare_1000g_reference.sh"
 [[ -f $reference_script ]] || fail "missing reference workflow: $reference_script"
 
