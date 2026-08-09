@@ -1,10 +1,10 @@
 # Ancestry estimation workflows
 
-These scripts generate the global- and local-ancestry files used by the manuscript analyses. They replace exploratory notebooks and cluster jobs that contained private paths or participant identifiers. Keep controlled genotype data and all generated files outside the repository.
+These scripts generate the global-ancestry files used by the manuscript analyses. They replace exploratory notebooks and cluster jobs that contained private paths or participant identifiers. Keep controlled genotype data and all generated files outside the repository.
 
 ## Software
 
-The historical analyses used PLINK 1.90b6.21, PLINK 2.00a3.7LM, ADMIXTURE 1.3.0, SHAPEIT4 4.1.3, and RFMix 2.03-r0. The local-ancestry preparation also requires bcftools and tabix. R runs the reference-selection and sample-order checks.
+The historical analyses used PLINK 1.90b6.21, PLINK 2.00a3.7LM, and ADMIXTURE 1.3.0. R runs the reference-selection and sample-order checks.
 
 Copy the example configuration and edit the paths:
 
@@ -80,53 +80,6 @@ Map the generated files to the manuscript inputs as follows:
 | `joint.5.Q` | `1000G_378.5.Q` |
 | `joint.fam` | `1000G_378.fam` |
 | Phase 3 PSAM metadata | `all_phase3.psam` |
-
-## Local ancestry
-
-The local-ancestry analysis used a separate 330-sample cohort on GRCh37. Do not combine its sample count with the 378-sample global-ancestry analysis.
-
-### 1. Prepare and phase the query cohort
-
-```bash
-WORK_DIR="$LOCAL_QUERY_WORK_DIR" \
-  bash workflow/ancestry/local/01_prepare_query_vcf.sh
-
-for chromosome in {1..22}; do
-  QUERY_VCF="$LOCAL_QUERY_WORK_DIR/query_common.vcf.gz" \
-  CHROMOSOME="$chromosome" \
-  WORK_DIR="$LOCAL_PHASED_WORK_DIR" \
-    bash workflow/ancestry/local/03_phase_query.sh
-done
-```
-
-Query QC removes variants with more than 5% missing genotypes, retains SNPs with MAF at least 1%, exports a bgzipped VCF, and creates its tabix index. SHAPEIT4 phases each autosome with the GRCh37 chromosome map, `--sequencing`, and eight threads.
-
-### 2. Prepare the RFMix reference
-
-```bash
-REFERENCE_VCF="$PHASED_REFERENCE_VCF" \
-REFERENCE_LABELS="$GLOBAL_REFERENCE_WORK_DIR/reference_selected.labels.tsv" \
-WORK_DIR="$LOCAL_REFERENCE_WORK_DIR" \
-  bash workflow/ancestry/local/02_prepare_rfmix_reference.sh
-```
-
-The script applies a 1% allele-frequency filter, retains biallelic SNPs, selects the 2,158 reference samples, and writes the RFMix sample map.
-
-### 3. Run RFMix
-
-```bash
-for chromosome in {1..22}; do
-  PHASED_QUERY_PATTERN="$LOCAL_PHASED_WORK_DIR/phased_chr%s.vcf.gz" \
-  REFERENCE_VCF="$LOCAL_REFERENCE_WORK_DIR/rfmix_reference.vcf.gz" \
-  REFERENCE_SAMPLE_MAP="$LOCAL_REFERENCE_WORK_DIR/reference_sample_map.txt" \
-  GENETIC_MAP="$RFMIX_GENETIC_MAP" \
-  CHROMOSOME="$chromosome" \
-  WORK_DIR="$LOCAL_RFMIX_WORK_DIR" \
-    bash workflow/ancestry/local/04_run_rfmix.sh
-done
-```
-
-RFMix uses eight threads and leaves other parameters at program defaults. The historical autosomal run analyzed 8,888,729 shared markers and produced `.msp.tsv`, `.fb.tsv`, `.sis.tsv`, and `.rfmix.Q` outputs.
 
 ## Privacy and review
 

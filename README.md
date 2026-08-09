@@ -11,7 +11,7 @@ results are not included.
 ```text
 analysis/   Numbered analysis and figure scripts
 R/          Shared data-processing, statistical, and plotting functions
-workflow/   Upstream global- and local-ancestry estimation code
+workflow/   Upstream global-ancestry estimation code
 ```
 
 ## Requirements
@@ -29,10 +29,10 @@ install.packages(c(
 
 The manuscript scripts consume precomputed ADMIXTURE ancestry proportions. The
 code under [`workflow/ancestry/`](workflow/ancestry/) prepares the 1000 Genomes
-reference, selects the reference panel, estimates ancestry in study samples,
-and runs the SHAPEIT4/RFMix local-ancestry analysis. Those workflows keep
-genotype data and participant-level outputs outside Git and expose paths
-through an example environment configuration.
+reference, selects the reference panel, harmonizes reference and study
+genotypes, and estimates ancestry in study samples with supervised ADMIXTURE.
+Those workflows keep genotype data and participant-level outputs outside Git
+and expose paths through an example environment configuration.
 
 ## Input data
 

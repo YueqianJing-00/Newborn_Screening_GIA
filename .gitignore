@@ -50,7 +50,4 @@ workflow/ancestry/work/
 *.prune.out
 *.nosex
 *.missnp
-*.msp.tsv
-*.fb.tsv
-*.sis.tsv
 slurm-*.out
