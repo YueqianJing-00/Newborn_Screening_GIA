@@ -7,6 +7,7 @@ fam_path <- file.path(joint_output_dir, "joint.fam")
 labels_path <- file.path(reference_output_dir, "reference_selected.labels.tsv")
 output_path <- file.path(joint_output_dir, "joint.pop")
 
+# Load the joint sample order and selected reference superpopulation labels.
 fam <- read.table(
   fam_path,
   header = FALSE,
@@ -34,6 +35,7 @@ if (!all(labels$IID %in% fam[[2L]])) {
   stop("Some labeled reference IIDs are absent from the joint FAM.", call. = FALSE)
 }
 
+# Label reference rows and mark study rows with the ADMIXTURE placeholder "-".
 label_index <- match(as.character(fam[[2L]]), labels$IID)
 reference_rows <- !is.na(label_index)
 population <- rep("-", nrow(fam))
@@ -44,6 +46,7 @@ if (sum(population != "-") != nrow(labels)) {
   stop("Reference label count does not match the joint FAM.", call. = FALSE)
 }
 
+# Write labels in the same row order as the joint PLINK dataset.
 write.table(
   population,
   output_path,

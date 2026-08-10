@@ -10,6 +10,7 @@ keep_path <- file.path(reference_output_dir, "reference_selected.keep")
 labels_path <- file.path(reference_output_dir, "reference_selected.labels.tsv")
 threshold <- 0.80
 
+# Load ancestry proportions, PLINK sample order, and 1000 Genomes metadata.
 q <- as.matrix(read.table(q_path, header = FALSE, check.names = FALSE))
 storage.mode(q) <- "double"
 fam <- read.table(
@@ -42,12 +43,15 @@ if (max(abs(rowSums(q) - 1)) > 1e-3) {
   stop("Q rows do not sum to one within tolerance.", call. = FALSE)
 }
 
+# Align superpopulation metadata to the FAM sample order by IID.
 metadata_index <- match(as.character(fam[[2L]]), as.character(psam$IID))
 if (anyNA(metadata_index)) stop("Some FAM IIDs are absent from PSAM.", call. = FALSE)
 
+# Retain references whose largest ancestry proportion exceeds the threshold.
 selected <- apply(q, 1L, max) > threshold
 if (!any(selected)) stop("No reference samples passed the threshold.", call. = FALSE)
 
+# Attach known superpopulation labels to the selected reference IDs.
 selected_rows <- which(selected)
 selected_labels <- data.frame(
   IID = as.character(fam[[2L]][selected_rows]),
@@ -60,6 +64,7 @@ if (!setequal(unique(selected_labels$SuperPop), expected_groups)) {
   stop("Selected references do not cover AFR, AMR, EAS, EUR, and SAS.", call. = FALSE)
 }
 
+# Group selected references by superpopulation while preserving FAM order.
 historical_group_order <- c("AMR", "AFR", "EUR", "SAS", "EAS")
 selected_order <- order(
   match(selected_labels$SuperPop, historical_group_order),
@@ -69,6 +74,7 @@ selected_rows <- selected_rows[selected_order]
 selected_labels <- selected_labels[selected_order, , drop = FALSE]
 selected_keep <- fam[selected_rows, 1:2, drop = FALSE]
 
+# Write the PLINK keep file and the supervised ADMIXTURE reference labels.
 write.table(
   selected_keep,
   keep_path,

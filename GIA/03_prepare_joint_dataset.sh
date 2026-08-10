@@ -20,6 +20,7 @@ reference_shared="${joint_output_dir}/reference_shared"
 study_shared="${joint_output_dir}/study_shared"
 joint_prefix="${joint_output_dir}/joint"
 
+# Extract the MSK-IMPACT SNPs and selected 1000 Genomes references.
 plink \
   --bfile "$reference_bfile" \
   --allow-extra-chr \
@@ -30,22 +31,26 @@ plink \
   --make-bed \
   --out "$selected_reference_impact"
 
+# Give reference variants coordinate-and-allele IDs for dataset matching.
 plink2 \
   --bfile "$selected_reference_impact" \
   --set-all-var-ids "$variant_id_template" \
   --make-bed \
   --out "$reference_canonical"
 
+# Convert study genotypes to PLINK with the same variant-ID convention.
 plink2 \
   "$study_input_option" "$study_input" \
   --set-all-var-ids "$variant_id_template" \
   --make-bed \
   --out "$study_canonical"
 
+# Identify variant IDs shared by the reference and study datasets.
 cut -f2 "$reference_canonical.bim" | LC_ALL=C sort -u >"$reference_ids"
 cut -f2 "$study_canonical.bim" | LC_ALL=C sort -u >"$study_ids"
 comm -12 "$reference_ids" "$study_ids" >"$shared_ids"
 
+# Restrict both datasets to the same shared variants and allele order.
 plink \
   --bfile "$reference_canonical" \
   --extract "$shared_ids" \
@@ -60,6 +65,7 @@ plink \
   --make-bed \
   --out "$study_shared"
 
+# Merge references first and study samples second for supervised ADMIXTURE.
 plink \
   --bfile "$reference_shared" \
   --bmerge "$study_shared" \

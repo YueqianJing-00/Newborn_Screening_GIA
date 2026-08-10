@@ -8,6 +8,7 @@ reference_output_dir="/secure/work/global_reference"
 reference_impact_prefix="${reference_output_dir}/reference_impact"
 k=5
 
+# Extract the 5,378 MSK-IMPACT SNPs into a PLINK reference dataset.
 plink \
   --bfile "$reference_bfile" \
   --allow-extra-chr \
@@ -16,6 +17,7 @@ plink \
   --make-bed \
   --out "$reference_impact_prefix"
 
+# Estimate K ancestry components in the 1000 Genomes reference samples.
 (
   cd "$(dirname "$reference_impact_prefix")"
   admixture "$(basename "$reference_impact_prefix").bed" "$k"
