@@ -2,12 +2,12 @@
 set -euo pipefail
 
 reference_bfile=${1}
-aim_list=${2}
+msk_impact_snp_list=${2}
 reference_keep=${3}
 study_input_option=${4}
 study_input=${5}
 variant_id_template=${6}
-reference_aims=${7}
+selected_reference_impact=${7}
 reference_canonical=${8}
 study_canonical=${9}
 reference_ids=${10}
@@ -20,15 +20,15 @@ joint_prefix=${15}
 plink \
   --bfile "$reference_bfile" \
   --allow-extra-chr \
-  --extract "$aim_list" \
+  --extract "$msk_impact_snp_list" \
   --keep "$reference_keep" \
   --indiv-sort f "$reference_keep" \
   --keep-allele-order \
   --make-bed \
-  --out "$reference_aims"
+  --out "$selected_reference_impact"
 
 plink2 \
-  --bfile "$reference_aims" \
+  --bfile "$selected_reference_impact" \
   --set-all-var-ids "$variant_id_template" \
   --make-bed \
   --out "$reference_canonical"
