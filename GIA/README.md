@@ -36,7 +36,7 @@ The script writes a PLINK keep file and a two-column IID/superpopulation label f
 
 ### 3. Build the MSK-IMPACT joint dataset
 
-The same 5,378-SNP MSK-IMPACT panel is used to harmonize the selected reference samples with the study genotypes. PLINK retains the allele-compatible panel markers shared by both datasets.
+The workflow reuses `reference_impact` from Step 1, then keeps and orders the references selected in Step 2. It does not extract the MSK-IMPACT SNPs from the original 1000 Genomes dataset again. PLINK then retains the allele-compatible panel markers shared by the selected references and study genotypes.
 Set `study_input_option` in `03_prepare_joint_dataset.sh` to `--vcf` for a VCF or `--bfile` for a PLINK binary-file prefix.
 
 ```bash
