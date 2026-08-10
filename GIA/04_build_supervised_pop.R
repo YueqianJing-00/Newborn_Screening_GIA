@@ -1,9 +1,11 @@
 #!/usr/bin/env Rscript
 
-args <- commandArgs(trailingOnly = TRUE)
-fam_path <- args[[1L]]
-labels_path <- args[[2L]]
-output_path <- args[[3L]]
+# Edit these paths before running.
+reference_output_dir <- "/secure/work/global_reference"
+joint_output_dir <- "/secure/work/global_joint"
+fam_path <- file.path(joint_output_dir, "joint.fam")
+labels_path <- file.path(reference_output_dir, "reference_selected.labels.tsv")
+output_path <- file.path(joint_output_dir, "joint.pop")
 
 fam <- read.table(
   fam_path,

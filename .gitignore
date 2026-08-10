@@ -30,7 +30,6 @@ results/
 **/subject_level*.csv
 
 # Genomics workflow inputs and generated files
-GIA/config.env
 GIA/work/
 *.bed
 *.bim
@@ -46,8 +45,6 @@ GIA/work/
 *.pop
 *.keep
 *.labels.tsv
-*.prune.in
-*.prune.out
 *.nosex
 *.missnp
 slurm-*.out

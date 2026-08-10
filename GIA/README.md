@@ -4,16 +4,12 @@ These scripts generate the global-ancestry files used by the manuscript analyses
 
 ## Software
 
-The historical analyses used PLINK 1.90b6.21, PLINK 2.00a3.7LM, and ADMIXTURE 1.3.0. Install these programs and R before running the workflow, and make `plink`, `plink2`, `admixture`, and `Rscript` available on `PATH`. The scripts receive all paths and parameters as arguments; they do not perform software or file preflight checks or create output directories.
+The historical analyses used PLINK 1.90b6.21, PLINK 2.00a3.7LM, and ADMIXTURE 1.3.0. Install these programs and R before running the workflow, and make `plink`, `plink2`, `admixture`, and `Rscript` available on `PATH`. Each script contains an editable path and parameter block near the top and accepts no command-line arguments. The scripts do not perform software or file preflight checks or create output directories.
 
-Copy the example configuration and edit the paths:
+Edit the paths in each script, then create the configured output directories. For the example paths currently shown in the scripts:
 
 ```bash
-cp GIA/config.example.env GIA/config.env
-set -a
-source GIA/config.env
-set +a
-mkdir -p "$REFERENCE_OUTPUT_DIR" "$JOINT_OUTPUT_DIR"
+mkdir -p /secure/work/global_reference /secure/work/global_joint
 ```
 
 ## Global ancestry
@@ -23,11 +19,7 @@ mkdir -p "$REFERENCE_OUTPUT_DIR" "$JOINT_OUTPUT_DIR"
 The reference workflow extracts the 5,378-SNP MSK-IMPACT panel from the 1000 Genomes dataset and runs unsupervised ADMIXTURE at K=5. The resulting ancestry matrix is used to select homogeneous reference samples.
 
 ```bash
-bash GIA/01_prepare_1000g_reference.sh \
-  "$REFERENCE_BFILE" \
-  "$MSK_IMPACT_SNP_LIST" \
-  "$REFERENCE_IMPACT_PREFIX" \
-  "$K"
+bash GIA/01_prepare_1000g_reference.sh
 ```
 
 The panel is used consistently for both reference selection and final study GIA estimation. Run all subsequent steps again whenever the reference selection changes so the keep file, joint dataset, and supervised ADMIXTURE output remain synchronized.
@@ -37,13 +29,7 @@ The panel is used consistently for both reference selection and final study GIA 
 Reference samples are selected when their maximum unsupervised K=5 ancestry proportion exceeds the configured threshold. The script records the resulting count rather than assuming a fixed number of references.
 
 ```bash
-Rscript GIA/02_select_reference_samples.R \
-  "$REFERENCE_Q" \
-  "$REFERENCE_FAM" \
-  "$REFERENCE_PSAM" \
-  "$REFERENCE_KEEP" \
-  "$REFERENCE_LABELS" \
-  "$REFERENCE_THRESHOLD"
+Rscript GIA/02_select_reference_samples.R
 ```
 
 The script writes a PLINK keep file and a two-column IID/superpopulation label file. It requires all five superpopulations and orders references as AMR, AFR, EUR, SAS, and EAS, matching the historical joint analysis.
@@ -51,30 +37,12 @@ The script writes a PLINK keep file and a two-column IID/superpopulation label f
 ### 3. Build the MSK-IMPACT joint dataset
 
 The same 5,378-SNP MSK-IMPACT panel is used to harmonize the selected reference samples with the study genotypes. PLINK retains the allele-compatible panel markers shared by both datasets.
-Set `STUDY_INPUT_OPTION` to `--vcf` for a VCF or `--bfile` for a PLINK binary-file prefix.
+Set `study_input_option` in `03_prepare_joint_dataset.sh` to `--vcf` for a VCF or `--bfile` for a PLINK binary-file prefix.
 
 ```bash
-bash GIA/03_prepare_joint_dataset.sh \
-  "$REFERENCE_BFILE" \
-  "$MSK_IMPACT_SNP_LIST" \
-  "$REFERENCE_KEEP" \
-  "$STUDY_INPUT_OPTION" \
-  "$STUDY_INPUT" \
-  "$VARIANT_ID_TEMPLATE" \
-  "$SELECTED_REFERENCE_IMPACT_PREFIX" \
-  "$REFERENCE_CANONICAL_PREFIX" \
-  "$STUDY_CANONICAL_PREFIX" \
-  "$REFERENCE_IDS" \
-  "$STUDY_IDS" \
-  "$SHARED_IDS" \
-  "$REFERENCE_SHARED_PREFIX" \
-  "$STUDY_SHARED_PREFIX" \
-  "$JOINT_PREFIX"
+bash GIA/03_prepare_joint_dataset.sh
 
-Rscript GIA/04_build_supervised_pop.R \
-  "$JOINT_FAM" \
-  "$REFERENCE_LABELS" \
-  "$JOINT_POP"
+Rscript GIA/04_build_supervised_pop.R
 ```
 
 The harmonization script assigns `chromosome:position:reference:alternate` variant IDs to both datasets, retains shared markers, and merges the selected references before the study samples.
@@ -82,9 +50,7 @@ The harmonization script assigns `chromosome:position:reference:alternate` varia
 ### 4. Estimate study GIA with MSK-IMPACT
 
 ```bash
-bash GIA/05_run_supervised_admixture.sh \
-  "$JOINT_PREFIX" \
-  "$K"
+bash GIA/05_run_supervised_admixture.sh
 ```
 
 ADMIXTURE reads the reference labels from `joint.pop` and estimates five ancestry proportions from the shared MSK-IMPACT markers for study rows marked with `-`. The historical run did not retain ADMIXTURE's terminal output. The saved `.pop`, FAM, and Q files support this supervised K=5 reconstruction.
@@ -101,4 +67,4 @@ Map the generated files to the manuscript inputs as follows:
 
 ## Privacy and review
 
-The scripts accept paths to controlled inputs but never include study IDs. Before a push, inspect `git status`, review staged files, and confirm that no VCF/PLINK files, sample maps, Q matrices, logs, or results are tracked.
+The committed scripts contain placeholder paths and no study IDs. If you edit them with private paths, restore the placeholders before committing. Before a push, inspect `git status`, review staged files, and confirm that no VCF/PLINK files, sample maps, Q matrices, logs, or results are tracked.

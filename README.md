@@ -32,7 +32,7 @@ code under [`GIA/`](GIA/) prepares the 1000 Genomes
 reference, selects the reference panel, harmonizes reference and study
 genotypes, and estimates ancestry in study samples with supervised ADMIXTURE.
 Those workflows keep genotype data and participant-level outputs outside Git
-and expose paths through an example environment configuration.
+and keep editable paths in configuration blocks at the top of each script.
 
 ## Input data
 

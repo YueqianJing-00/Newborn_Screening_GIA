@@ -1,12 +1,14 @@
 #!/usr/bin/env Rscript
 
-args <- commandArgs(trailingOnly = TRUE)
-q_path <- args[[1L]]
-fam_path <- args[[2L]]
-psam_path <- args[[3L]]
-keep_path <- args[[4L]]
-labels_path <- args[[5L]]
-threshold <- as.numeric(args[[6L]])
+# Edit these paths and parameters before running.
+reference_output_dir <- "/secure/work/global_reference"
+k <- 5L
+q_path <- file.path(reference_output_dir, sprintf("reference_impact.%d.Q", k))
+fam_path <- file.path(reference_output_dir, "reference_impact.fam")
+psam_path <- "/path/to/1000g_phase3/all_phase3.psam"
+keep_path <- file.path(reference_output_dir, "reference_selected.keep")
+labels_path <- file.path(reference_output_dir, "reference_selected.labels.tsv")
+threshold <- 0.80
 
 q <- as.matrix(read.table(q_path, header = FALSE, check.names = FALSE))
 storage.mode(q) <- "double"

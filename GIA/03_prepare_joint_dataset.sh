@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-reference_bfile=${1}
-msk_impact_snp_list=${2}
-reference_keep=${3}
-study_input_option=${4}
-study_input=${5}
-variant_id_template=${6}
-selected_reference_impact=${7}
-reference_canonical=${8}
-study_canonical=${9}
-reference_ids=${10}
-study_ids=${11}
-shared_ids=${12}
-reference_shared=${13}
-study_shared=${14}
-joint_prefix=${15}
+# Edit these paths and parameters before running.
+reference_bfile="/path/to/1000g_phase3/all_phase3"
+msk_impact_snp_list="/path/to/msk_impact_5378_snps.txt"
+reference_output_dir="/secure/work/global_reference"
+joint_output_dir="/secure/work/global_joint"
+reference_keep="${reference_output_dir}/reference_selected.keep"
+study_input_option=--vcf
+study_input="/secure/path/to/study_genotypes.vcf.gz"
+variant_id_template='@:#:$r:$a'
+selected_reference_impact="${joint_output_dir}/selected_reference_impact"
+reference_canonical="${joint_output_dir}/reference_canonical"
+study_canonical="${joint_output_dir}/study_canonical"
+reference_ids="${joint_output_dir}/reference_variant_ids.txt"
+study_ids="${joint_output_dir}/study_variant_ids.txt"
+shared_ids="${joint_output_dir}/shared_variant_ids.txt"
+reference_shared="${joint_output_dir}/reference_shared"
+study_shared="${joint_output_dir}/study_shared"
+joint_prefix="${joint_output_dir}/joint"
 
 plink \
   --bfile "$reference_bfile" \
