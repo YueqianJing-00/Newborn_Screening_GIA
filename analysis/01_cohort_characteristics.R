@@ -46,7 +46,10 @@ stopifnot(
 )
 
 is_reference <- fam$V2 %in% reference_selection$V1
-stopifnot(sum(is_reference) == 2158L, sum(!is_reference) == 378L)
+stopifnot(
+  sum(is_reference) == nrow(reference_selection),
+  sum(!is_reference) == 378L
+)
 
 phenotype_ids <- as.character(phenotype[["NBS-sample-ID"]])
 study_ids <- as.character(fam$V2[!is_reference])

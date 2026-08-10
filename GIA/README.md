@@ -18,28 +18,23 @@ mkdir -p "$REFERENCE_OUTPUT_DIR" "$JOINT_OUTPUT_DIR"
 
 ## Global ancestry
 
-### 1. Build the reference-selection matrix
+### 1. Estimate ancestry in 1000 Genomes with MSK-IMPACT
 
-The reference-selection workflow retains autosomal, strict biallelic A/C/G/T SNPs with MAF at least 1%, applies LD pruning with a 1,000-variant window, 100-variant step, and r2 threshold of 0.2, then runs unsupervised ADMIXTURE at K=5. This LD-pruned matrix is used only to select homogeneous 1000 Genomes reference samples; it is not the marker set used for final study GIA estimation.
+The reference workflow extracts the 5,378-SNP MSK-IMPACT panel from the 1000 Genomes dataset and runs unsupervised ADMIXTURE at K=5. The resulting ancestry matrix is used to select homogeneous reference samples.
 
 ```bash
 bash GIA/01_prepare_1000g_reference.sh \
   "$REFERENCE_BFILE" \
-  "$AUTOSOMAL_PREFIX" \
-  "$PRUNE_PREFIX" \
-  "$LD_PRUNED_PREFIX" \
-  "$REFERENCE_MAF" \
-  "$LD_WINDOW" \
-  "$LD_STEP" \
-  "$LD_R2" \
+  "$MSK_IMPACT_SNP_LIST" \
+  "$REFERENCE_IMPACT_PREFIX" \
   "$K"
 ```
 
-The historical run started with 2,504 Phase 3 samples and retained 768,584 LD-pruned variants.
+The panel is used consistently for both reference selection and final study GIA estimation. Run all subsequent steps again whenever the reference selection changes so the keep file, joint dataset, and supervised ADMIXTURE output remain synchronized.
 
 ### 2. Select homogeneous reference samples
 
-The manuscript reference panel includes samples with a maximum unsupervised K=5 ancestry proportion greater than 0.80. The threshold selected 2,158 individuals.
+Reference samples are selected when their maximum unsupervised K=5 ancestry proportion exceeds the configured threshold. The script records the resulting count rather than assuming a fixed number of references.
 
 ```bash
 Rscript GIA/02_select_reference_samples.R \
@@ -55,7 +50,7 @@ The script writes a PLINK keep file and a two-column IID/superpopulation label f
 
 ### 3. Build the MSK-IMPACT joint dataset
 
-Final study GIA estimation uses the 5,378-SNP MSK-IMPACT panel rather than the LD-pruned reference-selection marker set. Allele-compatible data were available for 5,375 of these markers in 2,158 reference samples and 378 study samples.
+The same 5,378-SNP MSK-IMPACT panel is used to harmonize the selected reference samples with the study genotypes. PLINK retains the allele-compatible panel markers shared by both datasets.
 Set `STUDY_INPUT_OPTION` to `--vcf` for a VCF or `--bfile` for a PLINK binary-file prefix.
 
 ```bash
@@ -98,7 +93,7 @@ Map the generated files to the manuscript inputs as follows:
 
 | Generated file | Role | Manuscript input name |
 | --- | --- | --- |
-| `reference_ld_pruned.5.Q` | Reference selection only | `gwas_ld_pruned.5.Q` |
+| `reference_impact.5.Q` | MSK-IMPACT reference estimation and selection | `1000G_impact.5.Q` |
 | `reference_selected.labels.tsv` | Selected reference labels | `sample_pure.txt` |
 | `joint.5.Q` | Final MSK-IMPACT GIA estimates | `1000G_378.5.Q` |
 | `joint.fam` | Final reference and study sample order | `1000G_378.fam` |

@@ -47,7 +47,7 @@ input_files <- c(
   joint_fam = file.path(input_dir, "1000G_378.fam"),
   reference_selection = file.path(input_dir, "sample_pure.txt"),
   reference_metadata = file.path(input_dir, "all_phase3.psam"),
-  reference_selection_q = file.path(input_dir, "gwas_ld_pruned.5.Q")
+  reference_selection_q = file.path(input_dir, "1000G_impact.5.Q")
 )
 require_files(input_files)
 
@@ -73,17 +73,19 @@ reference_q_raw <- as.matrix(
 stopifnot(
   nrow(fam) == nrow(joint_q_raw),
   ncol(joint_q_raw) == 5L,
-  nrow(reference_selection) == 2158L,
+  nrow(reference_selection) > 0L,
   nrow(reference_metadata) == nrow(reference_q_raw),
   ncol(reference_q_raw) == 5L,
   !anyDuplicated(reference_selection$IID),
   !anyDuplicated(phenotype[["NBS-sample-ID"]])
 )
 
-# The reference set is identified explicitly from sample_pure.txt, avoiding a
-# positional "first 2,158 rows" assumption.
+# The reference set is identified explicitly from sample_pure.txt.
 is_reference <- fam$V2 %in% reference_selection$IID
-stopifnot(sum(is_reference) == 2158L, sum(!is_reference) == 378L)
+stopifnot(
+  sum(is_reference) == nrow(reference_selection),
+  sum(!is_reference) == 378L
+)
 
 reference_ids_in_joint_order <- as.character(fam$V2[is_reference])
 stopifnot(setequal(reference_ids_in_joint_order, reference_selection$IID))
@@ -167,20 +169,19 @@ write.csv(
   row.names = FALSE
 )
 
-# The saved 2,158-person selection is exactly reproduced by max ancestry >0.80
-# in gwas_ld_pruned.5.Q. This resolves the 0.75/0.80 narrative conflict for
-# this descriptive release without claiming the missing upstream command log.
+# Reproduce the saved reference selection from the MSK-IMPACT ancestry matrix.
+reference_threshold <- 0.80
 selected_from_threshold <- reference_metadata[["#IID"]][
-  apply(reference_q, 1, max) > 0.80
+  apply(reference_q, 1, max) > reference_threshold
 ]
 stopifnot(
-  length(selected_from_threshold) == 2158L,
+  length(selected_from_threshold) == nrow(reference_selection),
   setequal(selected_from_threshold, reference_selection$IID)
 )
 
 reference_selection_audit <- data.frame(
   source_file = basename(input_files[["reference_selection_q"]]),
-  criterion = "maximum ancestry proportion > 0.80",
+  criterion = sprintf("maximum ancestry proportion > %.2f", reference_threshold),
   total_1000g = nrow(reference_q),
   selected_n = length(selected_from_threshold),
   saved_selection_n = nrow(reference_selection),
@@ -570,7 +571,7 @@ reference_plot <- bind_cols(
   ) %>%
   arrange(Population, desc(expected_proportion), desc(EUR), desc(AMR), desc(SAS), desc(AFR), desc(EAS)) %>%
   mutate(plot_index = row_number())
-stopifnot(nrow(reference_plot) == 2158L)
+stopifnot(nrow(reference_plot) == nrow(reference_selection))
 
 reference_plot_source <- reference_plot %>%
   transmute(
@@ -661,8 +662,14 @@ figure1a <- ggplot(reference_long, aes(plot_index, proportion, fill = ancestry))
   ) +
   coord_cartesian(ylim = c(0, 1), expand = FALSE) +
   labs(
-    title = "A  1000 Genomes homogeneous references (n = 2,158)",
-    subtitle = "Selected by maximum unsupervised K=5 ancestry proportion >0.80",
+    title = sprintf(
+      "A  1000 Genomes homogeneous references (n = %s)",
+      format(nrow(reference_plot), big.mark = ",", scientific = FALSE, trim = TRUE)
+    ),
+    subtitle = sprintf(
+      "Selected by maximum unsupervised K=5 ancestry proportion >%.2f",
+      reference_threshold
+    ),
     x = NULL,
     y = "Ancestry proportion",
     fill = "Ancestry component"

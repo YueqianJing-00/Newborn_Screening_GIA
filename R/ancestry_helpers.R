@@ -26,9 +26,7 @@ read_global_ancestry <- function(q_path, fam_path, psam_path, study_n = 378L) {
   if (ncol(q) != 5L) stop("Expected five ADMIXTURE components.")
 
   reference_n <- nrow(fam) - study_n
-  if (reference_n != 2158L) {
-    stop("Expected 2,158 reference samples and 378 study samples.")
-  }
+  if (reference_n < 1L) stop("Joint dataset contains no reference samples.")
 
   psam_id <- grep("IID$", names(psam), value = TRUE)
   if (length(psam_id) != 1L) stop("Could not identify a unique IID column in the PSAM file.")
