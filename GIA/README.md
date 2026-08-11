@@ -4,7 +4,9 @@ These scripts generate the global-ancestry files used by the manuscript analyses
 
 ## Software
 
-The historical analyses used PLINK 1.90b6.21, PLINK 2.00a3.7LM, and ADMIXTURE 1.3.0. Install these programs and R before running the workflow, and make `plink`, `plink2`, `admixture`, and `Rscript` available on `PATH`. Each script contains an editable path and parameter block near the top and accepts no command-line arguments. The scripts do not perform software or file preflight checks or create output directories.
+The workflow uses [PLINK 1.9 stable build 1.9.0-b.7.11 (19 August 2025)](https://www.cog-genomics.org/plink/1.9/) for every genotype operation and ADMIXTURE 1.3.0 for ancestry estimation. Install these programs and R before running the workflow, and make `plink`, `admixture`, and `Rscript` available on `PATH`. PLINK 2 is not required.
+
+Each script contains an editable path and parameter block near the top and accepts no command-line arguments. The scripts do not perform software or file preflight checks or create output directories.
 
 Edit the paths in each script, then create the configured output directories. For the example paths currently shown in the scripts:
 
@@ -45,7 +47,7 @@ bash GIA/03_prepare_joint_dataset.sh
 Rscript GIA/04_build_supervised_pop.R
 ```
 
-The harmonization script assigns `chromosome:position:reference:alternate` variant IDs to both datasets, retains shared markers, and merges the selected references before the study samples.
+The harmonization script preserves allele order, assigns `chromosome:position:A2:A1` variant IDs to both datasets by updating their `.bim` files, retains shared markers, and merges the selected references before the study samples. For VCF input, PLINK stores REF as A2 and ALT as A1.
 
 ### 4. Estimate study GIA with MSK-IMPACT
 
