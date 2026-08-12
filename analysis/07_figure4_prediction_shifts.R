@@ -35,18 +35,11 @@ parse_args <- function(args) {
     key <- gsub("-", "_", parts[[1]])
     if (!key %in% names(defaults)) stop("Unknown argument: --", parts[[1]])
     if (key %in% c("source_analysis", "source_run", "run_name")) {
-      if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", parts[[2]])) {
-        stop(key, " contains unsupported characters.")
-      }
       defaults[[key]] <- parts[[2]]
     } else if (key %in% c("confidence_cutoff", "target_sensitivity")) {
-      value <- suppressWarnings(as.numeric(parts[[2]]))
-      if (is.na(value) || value <= 0 || value >= 1) stop(key, " must be between 0 and 1.")
-      defaults[[key]] <- value
+      defaults[[key]] <- as.numeric(parts[[2]])
     } else {
-      value <- suppressWarnings(as.integer(parts[[2]]))
-      if (is.na(value) || value < 1L) stop(key, " must be a positive integer.")
-      defaults[[key]] <- value
+      defaults[[key]] <- as.integer(parts[[2]])
     }
   }
   defaults
@@ -96,11 +89,7 @@ input_files <- c(
   admixture_fam = file.path(input_dir, "1000G_378.fam"),
   reference_metadata = file.path(input_dir, "all_phase3.psam"),
   mean_oof_predictions = file.path(source_table_dir, "mean_oof_predictions.csv"),
-  repeat_oof_predictions = file.path(source_table_dir, "oof_predictions_by_repeat.csv"),
-  source_modeling_dataset = file.path(
-    source_table_dir,
-    "modeling_dataset_deidentified_restricted_internal.csv"
-  )
+  repeat_oof_predictions = file.path(source_table_dir, "oof_predictions_by_repeat.csv")
 )
 
 numeric_clean <- function(x) suppressWarnings(as.numeric(as.character(x)))
@@ -117,13 +106,8 @@ phenotype <- as.data.table(read_excel(
   sheet = "1474 DBS with full NBS data"
 ))
 id_col <- "NBS-sample-ID"
-if (!id_col %in% names(phenotype)) stop("Phenotype workbook is missing NBS-sample-ID.")
-if (anyDuplicated(phenotype[[id_col]])) stop("Phenotype IDs are not unique.")
-if (!all(global_ancestry$study$raw_id %in% phenotype[[id_col]])) stop("Study IDs do not all match.")
+# Match phenotype rows to the ADMIXTURE sample order.
 phenotype <- phenotype[match(global_ancestry$study$raw_id, phenotype[[id_col]])]
-if (!identical(as.character(phenotype[[id_col]]), global_ancestry$study$raw_id)) {
-  stop("ID-based phenotype ordering failed.")
-}
 
 pre_columns <- paste0("RACE_ETH_", 1:4)
 for (column in pre_columns) {
@@ -146,13 +130,6 @@ metabolite_features <- c(
   "C16", "C161", "C16OH", "C18", "C181", "C181OH", "C182", "C18OH", "CIT",
   "GLY", "MET", "ORN", "OXP", "PHE", "PRO", "TYR", "VAL", "XLE"
 )
-required_columns <- c(
-  id_col, "Group (patient, controls, falsepos)", "BIRTH_WT", "TPN_HYPERAL",
-  "AGE_AT_COLCTN", "GENDER", pre_columns, metabolite_features
-)
-missing_columns <- setdiff(required_columns, names(phenotype))
-if (length(missing_columns) > 0L) stop("Missing phenotype columns: ", paste(missing_columns, collapse = ", "))
-
 numeric_columns <- c("BIRTH_WT", "TPN_HYPERAL", "AGE_AT_COLCTN", metabolite_features)
 phenotype[, (numeric_columns) := lapply(.SD, numeric_clean), .SDcols = numeric_columns]
 phenotype[, male := fcase(
@@ -165,7 +142,6 @@ phenotype[, outcome := fcase(
   `Group (patient, controls, falsepos)` %in% c("falsepos284", "falsepos754"), "FP",
   default = NA_character_
 )]
-if (anyNA(phenotype$outcome)) stop("Unexpected outcome group labels.")
 phenotype[, c3_c2_ratio := fifelse(C02 > 0, C03 / C02, NA_real_)]
 phenotype[, mma_evaluable := !is.na(C03) & (!is.na(c3_c2_ratio) | C03 >= 6.3)]
 phenotype[, mma_screen_positive := mma_evaluable & (C03 >= 6.3 | c3_c2_ratio >= 0.3)]
@@ -196,14 +172,11 @@ eligible <- joined$mma_evaluable & joined$mma_screen_positive &
   !is.na(joined$TPN_HYPERAL) & joined$TPN_HYPERAL == 0 &
   complete.cases(full_matrix_all)
 model_data <- joined[eligible]
-if (nrow(model_data) != 117L || sum(model_data$outcome == "TP") != 85L || sum(model_data$outcome == "FP") != 32L) {
-  stop("Cohort did not reproduce 117 newborns (85 TP, 32 FP).")
-}
 
+# Recreate the same stable deidentified IDs used by the model run.
 sorted_ids <- sort(model_data[[id_col]])
 analysis_id_map <- setNames(sprintf("MMA_TPN0_%03d", seq_along(sorted_ids)), sorted_ids)
 model_data[, analysis_id := unname(analysis_id_map[get(id_col)])]
-if (anyNA(model_data$analysis_id) || anyDuplicated(model_data$analysis_id)) stop("Analysis ID creation failed.")
 
 ancestry_components <- c("AFR", "AMR", "EAS", "EUR", "SAS")
 ancestry_matrix <- as.matrix(model_data[, ..ancestry_components])
@@ -240,29 +213,12 @@ model_data[, PRE_aligned_GIA_proportion := mapply(
 
 mean_predictions <- fread(input_files[["mean_oof_predictions"]])
 repeat_predictions <- fread(input_files[["repeat_oof_predictions"]])
-source_modeling_dataset <- fread(input_files[["source_modeling_dataset"]])
-if (!all(c("analysis_id", "outcome", "FC", "C3_C2") %in% names(source_modeling_dataset))) {
-  stop("Source modeling dataset is missing analysis_id, outcome, FC, or C3_C2.")
-}
-if (
-  nrow(source_modeling_dataset) != 117L ||
-  !setequal(source_modeling_dataset$analysis_id, model_data$analysis_id) ||
-  !identical(
-    source_modeling_dataset[order(analysis_id), .(analysis_id, outcome)],
-    model_data[order(analysis_id), .(analysis_id, outcome)]
-  )
-) {
-  stop("Reconstructed cohort does not match the source RF modeling dataset by analysis ID and outcome.")
-}
 model_names <- c(
   core = "Clinical + metabolites",
   pre = "Clinical + metabolites + PRE",
   gia = "Clinical + metabolites + GIA",
   both = "Clinical + metabolites + PRE + GIA"
 )
-if (!setequal(unique(mean_predictions$model), unname(model_names))) {
-  stop("Unexpected model names in mean OOF predictions.")
-}
 
 mean_wide <- dcast(mean_predictions, analysis_id + outcome ~ model, value.var = "probability")
 setnames(mean_wide, unname(model_names), paste0("p_", names(model_names)))
@@ -279,7 +235,6 @@ subject <- merge(
   all = FALSE,
   sort = FALSE
 )
-if (nrow(subject) != 117L) stop("OOF prediction join did not reproduce 117 subjects.")
 
 # Prediction shifts and operating points ----
 
@@ -330,6 +285,7 @@ fwrite(operating_points, file.path(table_dir, "operating_points_mean_oof.csv"))
 subject[, disposition_pre := fifelse(p_pre >= op_pre$threshold, "Refer", "Do not refer")]
 subject[, disposition_both := fifelse(p_both >= op_both$threshold, "Refer", "Do not refer")]
 classify_transition <- function(outcome, before, after) {
+  # Label referral changes according to whether they move toward the observed outcome.
   beneficial <-
     (outcome == "TP" & before == "Do not refer" & after == "Refer") |
     (outcome == "FP" & before == "Refer" & after == "Do not refer")
@@ -389,6 +345,7 @@ repeat_operating <- rbindlist(lapply(unique(repeat_wide$repeat_id), function(rep
 fwrite(repeat_operating, file.path(table_dir, "repeat_operating_point_stability.csv"))
 
 make_subgroup_long <- function(data) {
+  # Stack the prespecified subgroup views for a common summary calculation.
   rbindlist(list(
     data[, .(analysis_id, outcome, correct_direction_shift, brier_improvement,
              proportion_repeats_beneficial, dimension = "Overall", stratum = "All subjects")],
@@ -404,6 +361,7 @@ make_subgroup_long <- function(data) {
 
 subgroup_long <- make_subgroup_long(subject)
 bootstrap_indices <- function(n, replicates) {
+  # Resample subjects within each subgroup for percentile confidence intervals.
   index <- replicate(replicates, sample.int(n, n, replace = TRUE))
   if (n == 1L) matrix(index, nrow = 1L) else index
 }

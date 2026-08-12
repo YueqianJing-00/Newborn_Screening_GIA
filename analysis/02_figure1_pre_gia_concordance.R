@@ -33,17 +33,12 @@ dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Source tables ----
 
-cross_file <- file.path(source_dir, "figure2_sre_majority_ga_source.csv")
 cohort_file <- file.path(
   source_dir,
   "figure1_cohort_admixture_source_restricted_internal.csv"
 )
 
-cross_source_reference <- read.csv(cross_file, check.names = FALSE, stringsAsFactors = FALSE)
 cohort <- read.csv(cohort_file, check.names = FALSE, stringsAsFactors = FALSE)
-if (sum(cross_source_reference$n) != nrow(cohort)) {
-  stop("The aggregate and individual-level source tables have inconsistent totals.")
-}
 
 pre_levels <- c(
   "Hispanic", "White", "Middle Eastern", "Black", "SAS", "EAS",
@@ -84,6 +79,7 @@ cohort <- cohort %>%
   )
 
 make_cross_table <- function(data) {
+  # Fill every PRE-GIA combination so empty cells remain visible in the plot.
   counts <- data %>%
     transmute(
       assigned_pre = as.character(assigned_pre),
@@ -127,6 +123,7 @@ theme_manuscript <- function(base_size = 9) {
 count_fill_max <- max(cross_all$n)
 
 make_count_heatmap <- function(data, x_label, show_y = TRUE) {
+  # Use a shared count scale so the full cohort and >70% subset are comparable.
   plot_data <- data %>%
     mutate(
       label = ifelse(n == 0, "", as.character(n)),

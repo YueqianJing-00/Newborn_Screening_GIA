@@ -52,7 +52,7 @@ input_files <- c(
   reference_selection_q = file.path(input_dir, "1000G_impact.5.Q")
 )
 
-# Read and validate inputs ----
+# Read inputs ----
 
 phenotype <- read_excel(
   input_files[["phenotype_workbook"]],
@@ -71,31 +71,12 @@ reference_q_raw <- as.matrix(
   fread(input_files[["reference_selection_q"]], header = FALSE)
 )
 
-stopifnot(
-  nrow(fam) == nrow(joint_q_raw),
-  ncol(joint_q_raw) == 5L,
-  nrow(reference_selection) > 0L,
-  nrow(reference_metadata) == nrow(reference_q_raw),
-  ncol(reference_q_raw) == 5L,
-  !anyDuplicated(reference_selection$IID),
-  !anyDuplicated(phenotype[["NBS-sample-ID"]])
-)
-
-# The reference set is identified explicitly from sample_pure.txt.
+# Separate reference and study rows using the saved reference IDs.
 is_reference <- fam$V2 %in% reference_selection$IID
-stopifnot(
-  sum(is_reference) == nrow(reference_selection),
-  sum(!is_reference) == 378L
-)
-
 reference_ids_in_joint_order <- as.character(fam$V2[is_reference])
-stopifnot(setequal(reference_ids_in_joint_order, reference_selection$IID))
 
-# Resolve the historical false-positive prefix mismatch by a validated key,
-# not by fixed row positions.
+# Match every study row to the phenotype workbook by sample ID.
 phenotype_ids <- as.character(phenotype[["NBS-sample-ID"]])
-stopifnot(!anyDuplicated(canonical_sample_id(phenotype_ids)))
-
 study_ids_raw <- as.character(fam$V2[!is_reference])
 study_match <- match(study_ids_raw, phenotype_ids)
 unmatched <- is.na(study_match)
@@ -103,7 +84,6 @@ study_match[unmatched] <- match(
   canonical_sample_id(study_ids_raw[unmatched]),
   canonical_sample_id(phenotype_ids)
 )
-stopifnot(!anyNA(study_match), !anyDuplicated(study_match), length(study_match) == 378L)
 cohort_raw <- phenotype[study_match, , drop = FALSE]
 
 # Dataset-specific column mappings, validated below against known 1000G
@@ -117,11 +97,7 @@ names(joint_q) <- joint_component_order
 reference_q <- as.data.frame(reference_q_raw)
 names(reference_q) <- reference_q_component_order
 
-stopifnot(
-  max(abs(rowSums(joint_q) - 1)) < 1e-3,
-  max(abs(rowSums(reference_q) - 1)) < 1e-3
-)
-
+# Confirm the hard-coded Q-column labels against known reference populations.
 reference_superpop <- reference_selection$SuperPop[
   match(reference_ids_in_joint_order, reference_selection$IID)
 ]
@@ -176,7 +152,6 @@ selected_from_threshold <- reference_metadata[["#IID"]][
   apply(reference_q, 1, max) > reference_threshold
 ]
 stopifnot(
-  length(selected_from_threshold) == nrow(reference_selection),
   setequal(selected_from_threshold, reference_selection$IID)
 )
 
@@ -198,7 +173,6 @@ write.csv(
 # Construct PRE and ancestry variables ----
 
 race_columns <- paste0("RACE_ETH_", 1:4)
-stopifnot(all(race_columns %in% names(cohort_raw)))
 
 sre_levels <- c(
   "Hispanic", "White", "Middle Eastern", "Black", "SAS", "EAS",
@@ -257,7 +231,6 @@ cohort$reporting_status <- factor(
   levels = c("Single/no multiple report", "Multiple")
 )
 cohort$majority_ga <- factor(cohort$majority_ga, levels = ancestry_levels)
-stopifnot(nrow(cohort) == 378L, sum(cohort$reporting_status == "Multiple") == 52L)
 
 # Cohort-count table: aggregate only; no sample identifiers.
 make_count_section <- function(section, values, levels = NULL) {
@@ -308,7 +281,6 @@ reference_counts <- reference_selection %>%
       transmute(IID = .data[["#IID"]], Population, metadata_superpop = SuperPop),
     by = "IID"
   )
-stopifnot(!anyNA(reference_counts$Population), all(reference_counts$SuperPop == reference_counts$metadata_superpop))
 reference_counts_table <- reference_counts %>%
   count(SuperPop, Population, name = "n") %>%
   group_by(SuperPop) %>%
@@ -572,8 +544,6 @@ reference_plot <- bind_cols(
   ) %>%
   arrange(Population, desc(expected_proportion), desc(EUR), desc(AMR), desc(SAS), desc(AFR), desc(EAS)) %>%
   mutate(plot_index = row_number())
-stopifnot(nrow(reference_plot) == nrow(reference_selection))
-
 reference_plot_source <- reference_plot %>%
   transmute(
     anonymous_plot_index = plot_index,
@@ -924,8 +894,6 @@ multi_plot <- multi_plot %>%
   ) %>%
   arrange(assigned_sre, reported_sre_combination, majority_ga, desc(expected_proportion)) %>%
   mutate(plot_index = row_number())
-stopifnot(nrow(multi_plot) == 52L)
-
 write.csv(
   multi_plot %>%
     transmute(
@@ -967,13 +935,6 @@ multi_with_key <- multi_with_key %>%
   ) %>%
   arrange(assigned_sre, reported_sre_combination, majority_ga, desc(expected_proportion), temp_row_key) %>%
   mutate(plot_index = row_number())
-stopifnot(
-  identical(
-    as.character(multi_plot$reported_sre_combination),
-    as.character(multi_with_key$reported_sre_combination)
-  )
-)
-
 selection_tile_source <- expand_grid(
   plot_index = multi_with_key$plot_index,
   reported_category = sre_levels

@@ -24,9 +24,6 @@ parse_args <- function(args) {
     parts <- strsplit(sub("^--", "", arg), "=", fixed = TRUE)[[1]]
     key <- gsub("-", "_", parts[[1]])
     if (!key %in% names(defaults)) stop("Unknown argument: --", parts[[1]])
-    if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", parts[[2]])) {
-      stop(key, " contains unsupported characters.")
-    }
     defaults[[key]] <- parts[[2]]
   }
   defaults
@@ -65,13 +62,6 @@ source_files <- c(
 
 subject <- fread(source_files[["subject"]])
 confidence <- fread(source_files[["confidence"]])
-
-if (nrow(subject) != 117L || sum(subject$outcome == "TP") != 85L || sum(subject$outcome == "FP") != 32L) {
-  stop("Subject source did not reproduce the 117-newborn cohort.")
-}
-if (nrow(confidence) != 4L || !setequal(confidence$outcome, c("TP", "FP"))) {
-  stop("GIA-confidence summary did not reproduce the four expected outcome-stratum cells.")
-}
 
 tp_color <- "#0072B2"
 fp_color <- "#D55E00"

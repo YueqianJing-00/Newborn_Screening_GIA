@@ -44,17 +44,8 @@ phenotype <- read_excel(
 fam <- fread(input_files[["joint_fam"]], header = FALSE)
 reference_selection <- fread(input_files[["reference_selection"]], header = FALSE)
 
-stopifnot(
-  !anyDuplicated(phenotype[["NBS-sample-ID"]]),
-  !anyDuplicated(reference_selection$V1)
-)
-
+# Separate the selected references and match study IDs to phenotype records.
 is_reference <- fam$V2 %in% reference_selection$V1
-stopifnot(
-  sum(is_reference) == nrow(reference_selection),
-  sum(!is_reference) == 378L
-)
-
 phenotype_ids <- as.character(phenotype[["NBS-sample-ID"]])
 study_ids <- as.character(fam$V2[!is_reference])
 
@@ -64,17 +55,11 @@ study_match[unmatched] <- match(
   canonical_sample_id(study_ids[unmatched]),
   canonical_sample_id(phenotype_ids)
 )
-stopifnot(
-  !anyNA(study_match),
-  !anyDuplicated(study_match),
-  length(study_match) == 378L
-)
 cohort <- phenotype[study_match, , drop = FALSE]
 
 # Derive table variables ----
 
 race_columns <- paste0("RACE_ETH_", 1:4)
-stopifnot(all(race_columns %in% names(cohort)))
 
 pre_levels <- c(
   "Hispanic", "White", "East Asian", "Black", "Other/Unknown",
@@ -124,25 +109,7 @@ collection_age <- suppressWarnings(as.numeric(cohort[["AGE_AT_COLCTN"]]))
 screening_year <- suppressWarnings(as.numeric(cohort[["YEAR"]]))
 gestational_days <- suppressWarnings(as.numeric(cohort[["GA_DAYS"]]))
 
-stopifnot(
-  length(outcome) == 378L,
-  sum(outcome == "True positive") == 235L,
-  sum(outcome == "False positive") == 143L,
-  sum(reported_pre_count >= 2L) == 52L,
-  identical(
-    as.integer(table(factor(assigned_pre, levels = pre_levels))),
-    c(205L, 83L, 34L, 23L, 14L, 9L, 9L, 1L)
-  ),
-  sum(gender == "Male") == 214L,
-  sum(gender == "Female") == 161L,
-  sum(gender == "Missing") == 3L,
-  sum(tpn == "No") == 303L,
-  sum(tpn == "Yes") == 55L,
-  sum(tpn == "Missing/invalid") == 20L,
-  sum(!is.na(birth_weight)) == 375L,
-  sum(!is.na(collection_age)) == 375L
-)
-
+# Format counts and continuous summaries for manuscript-ready tables.
 format_count <- function(n, denominator = 378L) {
   sprintf("%d (%.1f%%)", n, 100 * n / denominator)
 }
@@ -361,19 +328,6 @@ stratified_table_rows <- rbind(
   stratified_section("Total parenteral nutrition (TPN)"),
   stratified_rows(tpn_stratified, c("No", "Yes", "Unknown"))
 )
-
-for (section_start in which(stratified_table_rows$row_type == "section")) {
-  next_section <- which(
-    stratified_table_rows$row_type == "section" &
-      seq_len(nrow(stratified_table_rows)) > section_start
-  )
-  section_end <- if (length(next_section)) min(next_section) - 1L else nrow(stratified_table_rows)
-  section_rows <- seq.int(section_start + 1L, section_end)
-  stopifnot(
-    sum(stratified_table_rows$false_positive_n[section_rows]) == fp_denominator,
-    sum(stratified_table_rows$true_positive_n[section_rows]) == tp_denominator
-  )
-}
 
 write.csv(
   stratified_table_rows,

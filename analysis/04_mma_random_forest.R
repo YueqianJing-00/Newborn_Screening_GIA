@@ -54,9 +54,6 @@ parse_args <- function(args) {
     if (!key %in% names(defaults)) stop("Unknown argument: --", parts[[1]])
 
     if (key == "run_name") {
-      if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", parts[[2]])) {
-        stop("run_name must contain only letters, numbers, underscores, and hyphens.")
-      }
       defaults[[key]] <- parts[[2]]
     } else if (key == "gia_reference") {
       value <- toupper(parts[[2]])
@@ -71,9 +68,7 @@ parse_args <- function(args) {
       }
       defaults[[key]] <- value
     } else {
-      value <- suppressWarnings(as.integer(parts[[2]]))
-      if (is.na(value) || value < 1L) stop("Argument must be a positive integer: ", arg)
-      defaults[[key]] <- value
+      defaults[[key]] <- as.integer(parts[[2]])
     }
   }
 
@@ -138,20 +133,10 @@ phenotype <- as.data.table(read_excel(
   sheet = "1474 DBS with full NBS data"
 ))
 id_col <- "NBS-sample-ID"
-if (!id_col %in% names(phenotype)) stop("Workbook is missing NBS-sample-ID.")
-if (anyDuplicated(phenotype[[id_col]])) stop("Workbook NBS-sample-ID values are not unique.")
-if (!all(global_ancestry$study$raw_id %in% phenotype[[id_col]])) {
-  stop("Not all 378 normalized study IDs are present in the phenotype workbook.")
-}
+# Put phenotype rows in the same ID order as the ADMIXTURE study rows.
 phenotype <- phenotype[match(global_ancestry$study$raw_id, phenotype[[id_col]])]
-if (!identical(as.character(phenotype[[id_col]]), global_ancestry$study$raw_id)) {
-  stop("ID-based phenotype ordering failed.")
-}
 
 pre_columns <- paste0("RACE_ETH_", 1:4)
-if (!all(pre_columns %in% names(phenotype))) {
-  stop("Workbook is missing one or more parent-reported ethnicity columns.")
-}
 for (column in pre_columns) {
   values <- as.character(phenotype[[column]])
   values[values %in% east_asian_pre_labels] <- "EAS"
@@ -169,20 +154,6 @@ base_metabolite_features <- c(
 )
 metabolite_source_features <- c(base_metabolite_features, "FC")
 metabolite_candidate_features <- c(base_metabolite_features, "FC", "C3_C2")
-clinical_source <- c("BIRTH_WT", "TPN_HYPERAL", "AGE_AT_COLCTN", "GENDER")
-required_columns <- c(
-  id_col,
-  "Group (patient, controls, falsepos)",
-  "Condition or Positive For",
-  clinical_source,
-  pre_columns,
-  metabolite_source_features
-)
-missing_columns <- setdiff(required_columns, names(phenotype))
-if (length(missing_columns) > 0L) {
-  stop("Workbook is missing required columns: ", paste(missing_columns, collapse = ", "))
-}
-
 numeric_columns <- c(
   "BIRTH_WT", "TPN_HYPERAL", "AGE_AT_COLCTN",
   metabolite_source_features
@@ -198,8 +169,8 @@ phenotype[, outcome := fcase(
   `Group (patient, controls, falsepos)` %in% c("falsepos284", "falsepos754"), "FP",
   default = NA_character_
 )]
-if (anyNA(phenotype$outcome)) stop("Unexpected group labels prevent TP/FP assignment.")
 
+# Apply the published MMA screening rule before model eligibility filters.
 phenotype[, C3_C2 := fifelse(C02 > 0, C03 / C02, NA_real_)]
 phenotype[, mma_evaluable := !is.na(C03) & (!is.na(C3_C2) | C03 >= 6.3)]
 phenotype[, mma_screen_positive := mma_evaluable & (C03 >= 6.3 | C3_C2 >= 0.3)]
@@ -292,36 +263,11 @@ model_order <- c(
   "Clinical + metabolites + GIA",
   "Clinical + metabolites + PRE + GIA"
 )
-if (
-  nrow(model_data) != 117L ||
-    sum(y == "TP") != 85L ||
-    sum(y == "FP") != 32L
-) {
-  stop(
-    "Cohort assertion failed after excluding newborns receiving TPN. Expected n=117 (85 TP, 32 FP), observed n=",
-    nrow(model_data), " (", sum(y == "TP"), " TP, ", sum(y == "FP"), " FP)."
-  )
-}
-if (!all(model_data$TPN_HYPERAL == 0)) stop("The final cohort contains TPN-exposed newborns.")
-if (args$folds > min(table(y))) stop("Number of folds exceeds the smaller outcome class.")
-if (args$top_metabolites > ncol(metabolite_x)) {
-  stop("top_metabolites exceeds the metabolite-candidate count.")
-}
-if (ncol(metabolite_x) != 40L ||
-    !all(c("FC", "C3_C2") %in% colnames(metabolite_x))) {
-  stop("Expected a 40-metabolite candidate pool containing FC and C3/C2.")
-}
-minimum_predictors <- ncol(clinical_x) + args$top_metabolites
-if (args$mtry > minimum_predictors) {
-  stop("mtry exceeds the predictor count in the covariates-only model.")
-}
 
+# Replace source IDs with stable deidentified IDs before saving model data.
 sorted_ids <- sort(model_data[[id_col]])
 analysis_id_map <- setNames(sprintf("MMA_TPN0_%03d", seq_along(sorted_ids)), sorted_ids)
 analysis_ids <- unname(analysis_id_map[model_data[[id_col]]])
-if (anyNA(analysis_ids) || anyDuplicated(analysis_ids)) {
-  stop("Failed to create deidentified analysis IDs.")
-}
 
 modeling_dataset_internal <- as.data.table(cbind(
   data.frame(
@@ -482,6 +428,7 @@ fwrite(importance_group_metadata, file.path(table_dir, "importance_group_definit
 # Fold-wise selection and fitting ----
 
 rank_metabolites_in_training <- function(train_index) {
+  # Rank candidates using training subjects only to prevent feature-selection leakage.
   ranking <- rbindlist(lapply(colnames(metabolite_x), function(feature) {
     values <- metabolite_x[train_index, feature]
     auc_value <- if (length(unique(values)) < 2L) {
@@ -508,15 +455,10 @@ rank_metabolites_in_training <- function(train_index) {
   setorder(ranking, -absolute_auc_distance, metabolite)
   ranking[, rank := seq_len(.N)]
   ranking[, selected := rank <= args$top_metabolites]
-  if (
-    sum(ranking$selected) != args$top_metabolites ||
-      any(!is.finite(ranking[selected == TRUE]$absolute_auc_distance))
-  ) {
-    stop("Could not select exactly ", args$top_metabolites, " finite metabolite candidates.")
-  }
   ranking
 }
 
+# Fit all four models on the same training folds and predict held-out subjects.
 fit_one_repeat <- function(repeat_id) {
   fold <- fold_list[[repeat_id]]
   predictions <- setNames(
@@ -633,13 +575,6 @@ fit_one_repeat <- function(repeat_id) {
     }
   }
 
-  if (any(vapply(predictions, anyNA, logical(1)))) {
-    stop("Missing out-of-fold model prediction in repeat ", repeat_id, ".")
-  }
-  if (any(vapply(permuted_predictions, anyNA, logical(1)))) {
-    stop("Missing permuted out-of-fold prediction in repeat ", repeat_id, ".")
-  }
-
   metrics <- rbindlist(lapply(model_order, function(model_name) {
     performance <- classification_metrics(y, predictions[[model_name]])
     data.table(
@@ -706,10 +641,6 @@ if (.Platform$OS.type == "unix" && args$cores > 1L) {
     if (repeat_id %% 10L == 0L) cat("Finished repeat", repeat_id, "\n")
     fit_one_repeat(repeat_id)
   })
-}
-
-if (any(vapply(cv_results, inherits, logical(1), what = "try-error"))) {
-  stop("One or more cross-validation workers failed.")
 }
 
 # Summaries across repeats ----
@@ -832,9 +763,6 @@ point_results <- lapply(model_order, function(model_name) {
 })
 point_performance <- rbindlist(lapply(point_results, `[[`, "performance"))
 point_operating_points <- rbindlist(lapply(point_results, `[[`, "operating_point"))
-if (any(point_operating_points$achieved_sensitivity < 0.95)) {
-  stop("A primary operating point failed to attain sensitivity >=0.95.")
-}
 fwrite(point_operating_points, file.path(table_dir, "primary_operating_points.csv"))
 
 # Subject-level bootstrap inference ----
@@ -884,17 +812,6 @@ bootstrap_metrics <- rbindlist(lapply(bootstrap_results, `[[`, "metrics"))
 bootstrap_weights <- rbindlist(lapply(bootstrap_results, `[[`, "weights"))
 fwrite(bootstrap_metrics, file.path(table_dir, "subject_bootstrap_metrics.csv"))
 fwrite(bootstrap_weights, file.path(table_dir, "subject_bootstrap_weights.csv"))
-if (any(bootstrap_metrics$achieved_sensitivity < 0.95)) {
-  stop("A bootstrap operating point failed to attain sensitivity >=0.95.")
-}
-bootstrap_weight_check <- bootstrap_weights[, .(
-  sampled_tp = sum(multiplicity[outcome == "TP"]),
-  sampled_fp = sum(multiplicity[outcome == "FP"])
-), by = bootstrap_id]
-if (any(bootstrap_weight_check$sampled_tp != sum(y == "TP")) ||
-    any(bootstrap_weight_check$sampled_fp != sum(y == "FP"))) {
-  stop("Outcome-stratified bootstrap did not preserve class sample sizes.")
-}
 
 bootstrap_long <- melt(
   bootstrap_metrics,

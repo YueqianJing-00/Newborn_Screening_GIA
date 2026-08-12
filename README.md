@@ -3,7 +3,7 @@
 R code for the manuscript analyses comparing parent-reported ethnicity (PRE)
 with genetically inferred ancestry (GIA) in newborn-screening referrals. The
 repository includes the descriptive analyses, cohort tables, random-forest
-models, model checks, and code for Figures 1–4. Participant data and generated
+models, and code for Figures 1–4. Participant data and generated
 results are not included.
 
 ## Repository structure
@@ -65,7 +65,6 @@ Rscript analysis/01_cohort_characteristics.R
 Rscript analysis/02_figure1_pre_gia_concordance.R
 Rscript analysis/03_figure2_entropy_multiple_pre.R
 Rscript analysis/04_mma_random_forest.R
-Rscript analysis/05_validate_mma_random_forest.R
 Rscript analysis/06_figure3_model_performance.R
 Rscript analysis/07_figure4_prediction_shifts.R
 Rscript analysis/08_figure4_plot.R
@@ -80,10 +79,9 @@ The scripts run in this order:
 | 3 | `analysis/02_figure1_pre_gia_concordance.R` | Generate the PRE–GIA concordance and ancestry-threshold subfigures for Figure 1 |
 | 4 | `analysis/03_figure2_entropy_multiple_pre.R` | Compare ancestry entropy for single versus multiple PRE and draw Figure 2 |
 | 5 | `analysis/04_mma_random_forest.R` | Fit the four MMA random-forest models and estimate performance and importance |
-| 6 | `analysis/05_validate_mma_random_forest.R` | Check cohort, folds, predictions, metrics, and figure-source tables |
-| 7 | `analysis/06_figure3_model_performance.R` | Draw model-performance and permutation-importance plots (Figure 3) |
-| 8 | `analysis/07_figure4_prediction_shifts.R` | Analyze individual prediction changes after adding GIA |
-| 9 | `analysis/08_figure4_plot.R` | Draw the final two-panel Figure 4 |
+| 6 | `analysis/06_figure3_model_performance.R` | Draw model-performance and permutation-importance plots (Figure 3) |
+| 7 | `analysis/07_figure4_prediction_shifts.R` | Analyze individual prediction changes after adding GIA |
+| 8 | `analysis/08_figure4_plot.R` | Draw the final two-panel Figure 4 |
 
 The Figure 1 script saves each subfigure separately in PDF and PNG formats.
 

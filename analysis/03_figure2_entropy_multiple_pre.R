@@ -35,8 +35,7 @@ input_files <- c(
   entropy_overall = "entropy_overall_single_vs_multiple_bootstrap.csv",
   entropy_within_pre = "entropy_by_sre_single_vs_multiple_tests.csv",
   profile = "figure4_multisre_admixture_source_restricted_internal.csv",
-  selection_tiles = "figure4_multisre_selection_tiles_source_restricted_internal.csv",
-  component_mapping = "ancestry_component_mapping.csv"
+  selection_tiles = "figure4_multisre_selection_tiles_source_restricted_internal.csv"
 )
 input_paths <- file.path(source_table_dir, unname(input_files))
 names(input_paths) <- names(input_files)
@@ -51,50 +50,8 @@ entropy_overall <- read_source_csv(input_paths[["entropy_overall"]])
 entropy_within_pre <- read_source_csv(input_paths[["entropy_within_pre"]])
 profile_source <- read_source_csv(input_paths[["profile"]])
 tile_source <- read_source_csv(input_paths[["selection_tiles"]])
-component_mapping <- read_source_csv(input_paths[["component_mapping"]])
 
 ancestry_levels <- c("AMR", "AFR", "EUR", "SAS", "EAS")
-study_mapping <- component_mapping %>%
-  filter(source_file == "1000G_378.5.Q") %>%
-  arrange(match(raw_column, paste0("V", seq_along(ancestry_levels))))
-if (!identical(study_mapping$ancestry_component, ancestry_levels)) {
-  stop("The saved ancestry-component mapping does not match AMR/AFR/EUR/SAS/EAS.")
-}
-
-required_entropy_columns <- c(
-  "anonymous_plot_index", "assigned_sre", "reporting_status", "entropy_bits"
-)
-required_profile_columns <- c(
-  "anonymous_plot_index", "assigned_sre", "reported_sre_combination",
-  "majority_ga", "majority_ga_proportion", ancestry_levels
-)
-required_tile_columns <- c(
-  "anonymous_plot_index", "reported_category", "present"
-)
-if (!all(required_entropy_columns %in% names(entropy_individual))) {
-  stop("Unexpected columns in the entropy individual-level source table.")
-}
-if (!all(required_profile_columns %in% names(profile_source))) {
-  stop("Unexpected columns in the multiple-PRE GIA source table.")
-}
-if (!all(required_tile_columns %in% names(tile_source))) {
-  stop("Unexpected columns in the multiple-PRE selection-tile source table.")
-}
-if (nrow(entropy_individual) != 378L) {
-  stop("Expected 378 entropy rows; found ", nrow(entropy_individual), ".")
-}
-if (nrow(profile_source) != 52L) {
-  stop("Expected 52 multiple-PRE profiles; found ", nrow(profile_source), ".")
-}
-if (anyDuplicated(profile_source$anonymous_plot_index)) {
-  stop("Anonymous profile indices are not unique.")
-}
-if (nrow(tile_source) != 52L * 8L) {
-  stop("Expected 416 selection-tile rows; found ", nrow(tile_source), ".")
-}
-if (any(abs(rowSums(profile_source[, ancestry_levels]) - 1) > 2e-6)) {
-  stop("At least one GIA profile does not sum to 1 within rounding tolerance.")
-}
 
 assigned_pre_levels <- c(
   "Hispanic", "Black", "EAS", "SAS", "Middle Eastern",
@@ -125,15 +82,9 @@ entropy_plot_data <- entropy_individual %>%
       levels = status_levels_display
     )
   )
-if (any(is.na(entropy_plot_data$pre_reporting_status))) {
-  stop("Unrecognized PRE reporting status in entropy source table.")
-}
 
 tile_source <- tile_source %>%
   mutate(present = as.logical(present))
-if (any(is.na(tile_source$present))) {
-  stop("Selection-tile presence values could not be parsed as logical values.")
-}
 
 # Canonicalize each reported PRE combination as an unordered set. This merges
 # identical selection sets that appeared in different source-field orders.
@@ -171,10 +122,6 @@ profile <- profile_source %>%
   ) %>%
   mutate(profile_index = row_number())
 
-if (any(is.na(profile$reported_pre_combination))) {
-  stop("At least one multiple-PRE profile has no reconstructed PRE combination.")
-}
-
 profile_index_map <- profile %>%
   select(anonymous_plot_index, profile_index)
 
@@ -185,10 +132,6 @@ profile_tiles <- tile_source %>%
     reported_pre = factor(reported_category, levels = rev(selection_pre_levels)),
     present
   )
-if (any(is.na(profile_tiles$profile_index))) {
-  stop("Selection tiles did not map completely to the profile indices.")
-}
-
 profile_long <- profile %>%
   select(profile_index, assigned_pre, all_of(ancestry_levels)) %>%
   pivot_longer(

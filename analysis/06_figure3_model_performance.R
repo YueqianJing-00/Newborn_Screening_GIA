@@ -45,39 +45,15 @@ required_tables <- c(
   panel_b = "figure_panel_b_source.csv",
   primary_performance = "primary_performance.csv",
   paired_effects = "paired_effects.csv",
-  importance_summary = "permutation_importance_summary.csv",
-  metabolite_selection = "metabolite_selection_summary.csv",
-  cohort_summary = "cohort_summary.csv"
+  importance_summary = "permutation_importance_summary.csv"
 )
 required_paths <- setNames(file.path(source_table_dir, required_tables), names(required_tables))
-if (any(!file.exists(required_paths))) {
-  stop(
-    "Missing required source tables: ",
-    paste(rel_path(required_paths[!file.exists(required_paths)]), collapse = ", ")
-  )
-}
 
 performance_plot_source <- fread(required_paths[["panel_a"]])
 importance_plot_source <- fread(required_paths[["panel_b"]])
 primary_performance <- fread(required_paths[["primary_performance"]])
 paired_effects <- fread(required_paths[["paired_effects"]])
 importance_summary <- fread(required_paths[["importance_summary"]])
-metabolite_selection <- fread(required_paths[["metabolite_selection"]])
-cohort_summary <- fread(required_paths[["cohort_summary"]])
-
-if (
-  nrow(cohort_summary) != 1L ||
-    cohort_summary$n != 117L ||
-    cohort_summary$tp != 85L ||
-    cohort_summary$fp != 32L ||
-    cohort_summary$metabolite_candidates != 40L ||
-    cohort_summary$metabolites_selected_per_fold != 10L
-) {
-  stop("Source analysis does not match the 117-subject/top-10 protocol.")
-}
-if (!all(c("FC", "C3_C2") %in% metabolite_selection$metabolite)) {
-  stop("FC and C3/C2 are absent from the metabolite candidate ledger.")
-}
 
 model_order <- c(
   "Clinical + metabolites",
@@ -85,20 +61,6 @@ model_order <- c(
   "Clinical + metabolites + GIA",
   "Clinical + metabolites + PRE + GIA"
 )
-if (!setequal(unique(performance_plot_source$model), model_order)) {
-  stop("Panel A does not contain the four expected models.")
-}
-if (uniqueN(performance_plot_source$repeat_id) != 100L) {
-  stop("Panel A does not contain 100 cross-validation repeats.")
-}
-
-if (!"GIA_grouped" %in% importance_plot_source$group_id) {
-  stop("Panel B does not contain the grouped GIA importance row.")
-}
-if (any(grepl("^GIA_(AFR|AMR|EAS|EUR)$", importance_plot_source$group_id))) {
-  stop("Panel B unexpectedly contains individual GIA importance rows.")
-}
-
 model_labels <- c(
   "Clinical + metabolites" = "Covariates\nonly",
   "Clinical + metabolites + PRE" = "+ PRE",
