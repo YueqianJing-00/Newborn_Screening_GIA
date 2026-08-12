@@ -4,13 +4,9 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-helper_dir <- file.path(dirname(script_path), "..", "R")
-source(file.path(helper_dir, "project_setup.R"))
+project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+helper_dir <- file.path(project_root, "R")
 source(file.path(helper_dir, "plot_helpers.R"))
-
-require_packages(c(
-  "dplyr", "ggplot2", "patchwork", "ragg", "scales", "tidyr"
-))
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -20,15 +16,19 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-paths <- project_paths(script_path)
-run_dir <- file.path(paths$results, "figure2")
+results_dir <- normalizePath(
+  Sys.getenv("HGG_RESULTS_DIR", file.path(project_root, "results")),
+  mustWork = FALSE
+)
+run_dir <- file.path(results_dir, "figure2")
 figure_dir <- file.path(run_dir, "figures")
 table_dir <- file.path(run_dir, "tables")
-make_directories(figure_dir, table_dir)
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Source tables ----
 
-source_table_dir <- file.path(paths$results, "descriptive", "tables")
+source_table_dir <- file.path(results_dir, "descriptive", "tables")
 input_files <- c(
   entropy_individual = "figure3_entropy_source_restricted_internal.csv",
   entropy_summary = "figure3_entropy_summary.csv",
@@ -40,7 +40,6 @@ input_files <- c(
 )
 input_paths <- file.path(source_table_dir, unname(input_files))
 names(input_paths) <- names(input_files)
-require_files(input_paths)
 
 read_source_csv <- function(path) {
   read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)

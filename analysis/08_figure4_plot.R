@@ -6,8 +6,7 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
-require_packages(c("data.table", "ggplot2", "patchwork"))
+project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -25,7 +24,7 @@ parse_args <- function(args) {
     parts <- strsplit(sub("^--", "", arg), "=", fixed = TRUE)[[1]]
     key <- gsub("-", "_", parts[[1]])
     if (!key %in% names(defaults)) stop("Unknown argument: --", parts[[1]])
-    if (!is_run_name(parts[[2]])) {
+    if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", parts[[2]])) {
       stop(key, " contains unsupported characters.")
     }
     defaults[[key]] <- parts[[2]]
@@ -33,28 +32,36 @@ parse_args <- function(args) {
   defaults
 }
 
-paths <- project_paths(script_path)
-project_root <- paths$root
-analysis_dir <- file.path(paths$results, "figure4_analysis")
+results_dir <- normalizePath(
+  Sys.getenv("HGG_RESULTS_DIR", file.path(project_root, "results")),
+  mustWork = FALSE
+)
+analysis_dir <- file.path(results_dir, "figure4_analysis")
 args <- parse_args(commandArgs(trailingOnly = TRUE))
 source_run <- file.path(analysis_dir, "runs", args$source_run)
 source_tables <- file.path(source_run, "tables")
-run_dir <- file.path(paths$results, "figure4", args$run_name)
+run_dir <- file.path(results_dir, "figure4", args$run_name)
 table_dir <- file.path(run_dir, "tables")
 figure_dir <- file.path(run_dir, "figures")
-make_directories(table_dir, figure_dir)
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Prediction-shift sources ----
 
 rel_path <- function(path) {
-  relative_to_project(path, project_root)
+  path <- normalizePath(path, mustWork = FALSE)
+  prefix <- paste0(project_root, .Platform$file.sep)
+  if (startsWith(path, prefix)) {
+    substring(path, nchar(prefix) + 1L)
+  } else {
+    file.path("external", basename(path))
+  }
 }
 
 source_files <- c(
   subject = file.path(source_tables, "subject_level_case_patterns_source_restricted_internal.csv"),
   confidence = file.path(source_tables, "gia_confidence_score_shift_summary.csv")
 )
-require_files(source_files, "source file")
 
 subject <- fread(source_files[["subject"]])
 confidence <- fread(source_files[["confidence"]])

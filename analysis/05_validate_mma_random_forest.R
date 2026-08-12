@@ -6,17 +6,28 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
-require_packages(c("data.table", "pROC"))
+project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
 
 suppressPackageStartupMessages({
   library(data.table)
   library(pROC)
 })
 
-paths <- project_paths(script_path)
-project_root <- paths$root
-analysis_dir <- file.path(paths$results, "mma_model")
+results_dir <- normalizePath(
+  Sys.getenv("HGG_RESULTS_DIR", file.path(project_root, "results")),
+  mustWork = FALSE
+)
+analysis_dir <- file.path(results_dir, "mma_model")
+
+rel_path <- function(path) {
+  path <- normalizePath(path, mustWork = FALSE)
+  prefix <- paste0(project_root, .Platform$file.sep)
+  if (startsWith(path, prefix)) {
+    substring(path, nchar(prefix) + 1L)
+  } else {
+    file.path("external", basename(path))
+  }
+}
 
 cli_args <- commandArgs(trailingOnly = TRUE)
 run_arg <- grep("^--run-name=", cli_args, value = TRUE)
@@ -24,12 +35,12 @@ if (length(run_arg) > 1L || length(setdiff(cli_args, run_arg)) > 0L) {
   stop("Usage: Rscript analysis/05_validate_mma_random_forest.R [--run-name=NAME]")
 }
 run_name <- if (length(run_arg) == 1L) sub("^--run-name=", "", run_arg) else "main_117_top10_metabolites"
-if (!is_run_name(run_name)) stop("Invalid run name.")
+if (!grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", run_name)) stop("Invalid run name.")
 
 run_dir <- file.path(analysis_dir, "runs", run_name)
 table_dir <- file.path(run_dir, "tables")
 qa_dir <- file.path(run_dir, "qa")
-make_directories(qa_dir)
+dir.create(qa_dir, recursive = TRUE, showWarnings = FALSE)
 
 checks <- character()
 assert_true <- function(condition, label) {
@@ -431,7 +442,7 @@ report_path <- file.path(qa_dir, "validation_report.txt")
 report <- c(
   "RF rerun output validation",
   paste0("Validation time: ", format(Sys.time(), tz = "America/New_York")),
-  paste0("Run directory: ", relative_to_project(run_dir, project_root)),
+  paste0("Run directory: ", rel_path(run_dir)),
   "",
   checks,
   "",

@@ -4,22 +4,27 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-helper_dir <- file.path(dirname(script_path), "..", "R")
-source(file.path(helper_dir, "project_setup.R"))
+project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+helper_dir <- file.path(project_root, "R")
 source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))
-require_packages(c("data.table", "readxl"))
 
 suppressPackageStartupMessages({
   library(data.table)
   library(readxl)
 })
 
-paths <- project_paths(script_path)
-input_dir <- paths$data
-analysis_dir <- file.path(paths$results, "cohort_characteristics")
+input_dir <- normalizePath(
+  Sys.getenv("HGG_DATA_DIR", file.path(project_root, "data", "raw")),
+  mustWork = FALSE
+)
+results_dir <- normalizePath(
+  Sys.getenv("HGG_RESULTS_DIR", file.path(project_root, "results")),
+  mustWork = FALSE
+)
+analysis_dir <- file.path(results_dir, "cohort_characteristics")
 table_dir <- file.path(analysis_dir, "tables")
-make_directories(table_dir)
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Read and match the cohort ----
 
@@ -30,7 +35,6 @@ input_files <- c(
   joint_fam = file.path(input_dir, "1000G_378.fam"),
   reference_selection = file.path(input_dir, "sample_pure.txt")
 )
-require_files(input_files)
 
 phenotype <- read_excel(
   input_files[["phenotype_workbook"]],

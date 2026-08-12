@@ -6,17 +6,12 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-helper_dir <- file.path(dirname(script_path), "..", "R")
-source(file.path(helper_dir, "project_setup.R"))
+project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+helper_dir <- file.path(project_root, "R")
 source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))
 source(file.path(helper_dir, "statistical_helpers.R"))
 source(file.path(helper_dir, "plot_helpers.R"))
-
-require_packages(c(
-  "data.table", "dplyr", "ggplot2", "patchwork", "ragg",
-  "readxl", "scales", "tidyr"
-))
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -28,12 +23,19 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-paths <- project_paths(script_path)
-input_dir <- paths$data
-analysis_dir <- file.path(paths$results, "descriptive")
+input_dir <- normalizePath(
+  Sys.getenv("HGG_DATA_DIR", file.path(project_root, "data", "raw")),
+  mustWork = FALSE
+)
+results_dir <- normalizePath(
+  Sys.getenv("HGG_RESULTS_DIR", file.path(project_root, "results")),
+  mustWork = FALSE
+)
+analysis_dir <- file.path(results_dir, "descriptive")
 table_dir <- file.path(analysis_dir, "tables")
 figure_dir <- file.path(analysis_dir, "figures")
-make_directories(table_dir, figure_dir)
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 seed <- 20260710L
 bootstrap_replicates <- 10000L
@@ -49,7 +51,6 @@ input_files <- c(
   reference_metadata = file.path(input_dir, "all_phase3.psam"),
   reference_selection_q = file.path(input_dir, "1000G_impact.5.Q")
 )
-require_files(input_files)
 
 # Read and validate inputs ----
 

@@ -6,8 +6,7 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-source(file.path(dirname(script_path), "..", "R", "project_setup.R"))
-require_packages(c("data.table", "ggplot2", "patchwork"))
+project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -15,21 +14,30 @@ suppressPackageStartupMessages({
   library(patchwork)
 })
 
-paths <- project_paths(script_path)
-project_root <- paths$root
-analysis_dir <- file.path(paths$results, "figure3")
+results_dir <- normalizePath(
+  Sys.getenv("HGG_RESULTS_DIR", file.path(project_root, "results")),
+  mustWork = FALSE
+)
+analysis_dir <- file.path(results_dir, "figure3")
 source_analysis_dir <- file.path(
-  paths$results, "mma_model", "runs", "main_117_top10_metabolites"
+  results_dir, "mma_model", "runs", "main_117_top10_metabolites"
 )
 source_table_dir <- file.path(source_analysis_dir, "tables")
 output_table_dir <- file.path(analysis_dir, "tables")
 output_figure_dir <- file.path(analysis_dir, "figures")
-make_directories(output_table_dir, output_figure_dir)
+dir.create(output_table_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Model source tables ----
 
 rel_path <- function(path) {
-  relative_to_project(path, project_root)
+  path <- normalizePath(path, mustWork = FALSE)
+  prefix <- paste0(project_root, .Platform$file.sep)
+  if (startsWith(path, prefix)) {
+    substring(path, nchar(prefix) + 1L)
+  } else {
+    file.path("external", basename(path))
+  }
 }
 
 required_tables <- c(

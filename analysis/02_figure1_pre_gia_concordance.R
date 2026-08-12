@@ -7,13 +7,9 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-helper_dir <- file.path(dirname(script_path), "..", "R")
-source(file.path(helper_dir, "project_setup.R"))
+project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+helper_dir <- file.path(project_root, "R")
 source(file.path(helper_dir, "statistical_helpers.R"))
-
-require_packages(c(
-  "dplyr", "ggplot2", "ragg", "scales", "tidyr"
-))
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -24,12 +20,16 @@ suppressPackageStartupMessages({
 
 profiles_only <- "--profiles-only" %in% commandArgs(trailingOnly = TRUE)
 
-paths <- project_paths(script_path)
-analysis_dir <- file.path(paths$results, "figure1")
-source_dir <- file.path(paths$results, "descriptive", "tables")
+results_dir <- normalizePath(
+  Sys.getenv("HGG_RESULTS_DIR", file.path(project_root, "results")),
+  mustWork = FALSE
+)
+analysis_dir <- file.path(results_dir, "figure1")
+source_dir <- file.path(results_dir, "descriptive", "tables")
 figure_dir <- file.path(analysis_dir, "figures")
 table_dir <- file.path(analysis_dir, "tables")
-make_directories(figure_dir, table_dir)
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Source tables ----
 
@@ -38,8 +38,6 @@ cohort_file <- file.path(
   source_dir,
   "figure1_cohort_admixture_source_restricted_internal.csv"
 )
-required_inputs <- c(cross_file, cohort_file)
-require_files(required_inputs, "source file")
 
 cross_source_reference <- read.csv(cross_file, check.names = FALSE, stringsAsFactors = FALSE)
 cohort <- read.csv(cohort_file, check.names = FALSE, stringsAsFactors = FALSE)
