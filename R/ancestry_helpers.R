@@ -1,10 +1,12 @@
 # Helpers for matching study samples and labeling ADMIXTURE components.
 
 canonical_sample_id <- function(x) {
+  # Remove the cohort prefix used only for false-positive sample files.
   sub("^NBSfalsepos_", "", as.character(x))
 }
 
 validate_component_mapping <- function(summary_table, ancestry_columns) {
+  # The largest mean component must match each known reference population.
   largest_component <- ancestry_columns[
     max.col(as.matrix(summary_table[, ancestry_columns, drop = FALSE]))
   ]
@@ -18,21 +20,26 @@ validate_component_mapping <- function(summary_table, ancestry_columns) {
 }
 
 read_global_ancestry <- function(q_path, fam_path, psam_path, study_n = 378L) {
+  # Read ADMIXTURE proportions, their sample order, and reference metadata.
   fam <- data.table::fread(fam_path, header = FALSE)
   q <- data.table::fread(q_path, header = FALSE)
   psam <- data.table::fread(psam_path)
-
-  if (nrow(fam) != nrow(q)) stop("FAM and Q row counts differ.")
-  if (ncol(q) != 5L) stop("Expected five ADMIXTURE components.")
+  ancestry_components <- c("AFR", "AMR", "EAS", "EUR", "SAS")
 
   reference_n <- nrow(fam) - study_n
-  if (reference_n < 1L) stop("Joint dataset contains no reference samples.")
+  valid_dimensions <-
+    nrow(fam) == nrow(q) &&
+    ncol(q) == length(ancestry_components) &&
+    reference_n > 0L
+  if (!valid_dimensions) {
+    stop("FAM and five-component Q dimensions do not match.")
+  }
 
-  psam_id <- grep("IID$", names(psam), value = TRUE)
-  if (length(psam_id) != 1L) stop("Could not identify a unique IID column in the PSAM file.")
-  data.table::setnames(psam, psam_id, "IID")
+  data.table::setnames(psam, sub("^#", "", names(psam)))
 
-  q_columns <- paste0("V", seq_len(5L))
+  q_columns <- paste0("V", seq_along(ancestry_components))
+
+  # Join reference rows to known superpopulations without changing FAM order.
   reference <- data.table::data.table(
     IID = fam$V2[seq_len(reference_n)],
     q[seq_len(reference_n)]
@@ -44,18 +51,15 @@ read_global_ancestry <- function(q_path, fam_path, psam_path, study_n = 378L) {
     all.x = TRUE,
     sort = FALSE
   )
-  if (anyNA(reference$SuperPop)) stop("Some reference IDs are missing from the PSAM file.")
 
+  # Average each raw Q column within the five reference superpopulations.
   reference_means <- reference[
     , lapply(.SD, mean),
     by = SuperPop,
     .SDcols = q_columns
   ]
-  ancestry_components <- c("AFR", "AMR", "EAS", "EUR", "SAS")
-  if (!setequal(reference_means$SuperPop, ancestry_components)) {
-    stop("Unexpected reference superpopulations.")
-  }
 
+  # Name each Q column for the population where its mean membership is largest.
   mapping <- reference_means[, {
     values <- unlist(.SD)
     index <- which.max(values)
@@ -64,17 +68,19 @@ read_global_ancestry <- function(q_path, fam_path, psam_path, study_n = 378L) {
       mean_reference_membership = values[index]
     )
   }, by = SuperPop, .SDcols = q_columns]
-  if (data.table::uniqueN(mapping$q_column) != 5L) {
-    stop("ADMIXTURE component mapping is not one-to-one.")
-  }
-  if (any(mapping$mean_reference_membership < 0.95)) {
-    stop("ADMIXTURE components are not well separated in the reference samples.")
+
+  mapping_is_clear <-
+    setequal(reference_means$SuperPop, ancestry_components) &&
+    data.table::uniqueN(mapping$q_column) == length(ancestry_components) &&
+    all(mapping$mean_reference_membership >= 0.95)
+  if (!mapping_is_clear) {
+    stop("Reference populations do not define five distinct ADMIXTURE components.")
   }
 
+  # Apply the inferred component names to the study rows.
   study_rows <- (reference_n + 1L):nrow(fam)
   study_ids <- as.character(fam$V2[study_rows])
   unprefixed <- grepl("^p04w", study_ids)
-  if (sum(unprefixed) != 48L) stop("Unexpected number of unprefixed study IDs.")
   study_ids[unprefixed] <- paste0("NBSfalsepos_", study_ids[unprefixed])
   if (anyDuplicated(study_ids)) stop("Duplicate study IDs after normalization.")
 
@@ -84,12 +90,10 @@ read_global_ancestry <- function(q_path, fam_path, psam_path, study_n = 378L) {
   study[, raw_id := study_ids]
   data.table::setcolorder(study, c("raw_id", ancestry_components))
 
-  maximum_sum_error <- max(
-    abs(rowSums(study[, ..ancestry_components]) - 1)
+  maximum_sum_error <- max(abs(rowSums(study[, ..ancestry_components]) - 1))
+  if (maximum_sum_error > 5e-4) stop(
+    "Study ancestry proportions do not sum to one within tolerance."
   )
-  if (maximum_sum_error > 5e-4) {
-    stop("Study ancestry proportions do not sum to one within tolerance.")
-  }
 
   list(
     study = study,

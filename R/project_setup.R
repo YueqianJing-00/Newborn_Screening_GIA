@@ -1,14 +1,17 @@
 # Paths and small setup helpers shared by the command-line scripts.
 
 current_script <- function() {
-  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(file_arg) != 1L) {
-    stop("Could not determine the current script from --file.", call. = FALSE)
-  }
+  # Rscript supplies the active file as --file=<path>.
+  file_arg <- grep(
+    "^--file=",
+    commandArgs(trailingOnly = FALSE),
+    value = TRUE
+  )[[1L]]
   normalizePath(sub("^--file=", "", file_arg), mustWork = TRUE)
 }
 
 find_project_root <- function(start = getwd()) {
+  # Walk upward until the repository's analysis and helper folders are found.
   path <- normalizePath(start, mustWork = TRUE)
   repeat {
     is_project <- file.exists(file.path(path, "README.md")) &&
@@ -24,6 +27,8 @@ find_project_root <- function(start = getwd()) {
 
 project_paths <- function(script = current_script()) {
   root <- find_project_root(dirname(script))
+
+  # Environment variables can redirect controlled data and generated results.
   data_dir <- Sys.getenv("HGG_DATA_DIR", unset = file.path(root, "data", "raw"))
   results_dir <- Sys.getenv("HGG_RESULTS_DIR", unset = file.path(root, "results"))
 
@@ -39,6 +44,7 @@ relative_to_project <- function(path, root) {
   root <- normalizePath(root, mustWork = TRUE)
   prefix <- paste0(root, .Platform$file.sep)
 
+  # Keep project paths reproducible and mask external directory structure.
   if (startsWith(path, prefix)) {
     substring(path, nchar(prefix) + 1L)
   } else {
@@ -72,6 +78,7 @@ require_files <- function(paths, label = "input") {
 }
 
 make_directories <- function(...) {
+  # Create every requested output directory, including missing parents.
   paths <- unlist(list(...), use.names = FALSE)
   vapply(
     paths,

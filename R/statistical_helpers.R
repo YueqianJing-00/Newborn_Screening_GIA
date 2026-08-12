@@ -1,12 +1,15 @@
 # Statistical helpers shared by descriptive and prediction analyses.
 
 cohen_kappa <- function(observed, expected, levels) {
+  # Build a common-level confusion matrix before calculating agreement.
   confusion <- table(
     factor(observed, levels = levels),
     factor(expected, levels = levels)
   )
   n <- sum(confusion)
   agreement <- sum(diag(confusion)) / n
+
+  # Expected agreement comes from the two marginal category distributions.
   chance_agreement <- sum(rowSums(confusion) * colSums(confusion)) / n^2
   kappa <- if (chance_agreement < 1) {
     (agreement - chance_agreement) / (1 - chance_agreement)
@@ -23,6 +26,7 @@ cohen_kappa <- function(observed, expected, levels) {
 }
 
 cliffs_delta <- function(x, y) {
+  # Convert the rank-sum statistic to the probability-scale effect size.
   nx <- length(x)
   ny <- length(y)
   ranks <- rank(c(x, y), ties.method = "average")
@@ -36,6 +40,7 @@ format_p_value <- function(p) {
 }
 
 make_stratified_folds <- function(outcome, k, seed) {
+  # Shuffle within each outcome class, then distribute cases across folds.
   set.seed(seed)
   fold <- integer(length(outcome))
   for (level in levels(outcome)) {
@@ -47,6 +52,8 @@ make_stratified_folds <- function(outcome, k, seed) {
 
 operating_point <- function(outcome, probability, target_sensitivity = 0.95) {
   outcome <- as.character(outcome)
+
+  # Evaluate every observed probability as a possible decision threshold.
   thresholds <- sort(unique(probability), decreasing = TRUE)
   candidates <- data.table::rbindlist(lapply(thresholds, function(threshold) {
     positive <- probability >= threshold
@@ -66,6 +73,7 @@ operating_point <- function(outcome, probability, target_sensitivity = 0.95) {
     )
   }))
 
+  # Among thresholds meeting sensitivity, prefer specificity and then threshold.
   candidates <- candidates[sensitivity >= target_sensitivity]
   if (!nrow(candidates)) stop("No empirical threshold reaches target sensitivity.")
   data.table::setorder(candidates, -specificity, -threshold)
@@ -73,6 +81,7 @@ operating_point <- function(outcome, probability, target_sensitivity = 0.95) {
 }
 
 classification_metrics <- function(outcome, probability, target_sensitivity = 0.95) {
+  # Use FP as the negative class and TP as the positive class throughout.
   outcome <- factor(outcome, levels = c("FP", "TP"))
   roc <- pROC::roc(
     response = outcome,
@@ -83,6 +92,7 @@ classification_metrics <- function(outcome, probability, target_sensitivity = 0.
   )
   point <- operating_point(outcome, probability, target_sensitivity)
 
+  # Return discrimination, high-sensitivity specificity, and calibration error.
   list(
     auc = as.numeric(pROC::auc(roc)),
     specificity95 = point$specificity,
@@ -92,5 +102,6 @@ classification_metrics <- function(outcome, probability, target_sensitivity = 0.
 }
 
 quantile_ci <- function(x) {
+  # Use percentile limits for bootstrap confidence intervals.
   unname(quantile(x, c(0.025, 0.975), na.rm = TRUE, type = 6))
 }
