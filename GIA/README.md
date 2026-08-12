@@ -63,4 +63,4 @@ Map the generated files to the manuscript inputs as follows:
 
 ## Privacy and review
 
-The committed scripts contain placeholder paths and no study IDs. If you edit them with private paths, restore the placeholders before committing. Before a push, inspect `git status`, review staged files, and confirm that no VCF/PLINK files, sample maps, Q matrices, logs, or results are tracked.
+The committed scripts contain placeholder paths and no study IDs.
