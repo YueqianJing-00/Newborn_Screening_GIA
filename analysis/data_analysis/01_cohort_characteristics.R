@@ -4,7 +4,7 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+project_root <- normalizePath(file.path(dirname(script_path), "..", ".."), mustWork = TRUE)
 helper_dir <- file.path(project_root, "R")
 source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))

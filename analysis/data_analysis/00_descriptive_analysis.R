@@ -6,20 +6,16 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+project_root <- normalizePath(file.path(dirname(script_path), "..", ".."), mustWork = TRUE)
 helper_dir <- file.path(project_root, "R")
 source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))
 source(file.path(helper_dir, "statistical_helpers.R"))
-source(file.path(helper_dir, "plot_helpers.R"))
 
 suppressPackageStartupMessages({
   library(data.table)
   library(dplyr)
-  library(ggplot2)
-  library(patchwork)
   library(readxl)
-  library(scales)
   library(tidyr)
 })
 
@@ -33,9 +29,7 @@ results_dir <- normalizePath(
 )
 analysis_dir <- file.path(results_dir, "descriptive")
 table_dir <- file.path(analysis_dir, "tables")
-figure_dir <- file.path(analysis_dir, "figures")
 dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 seed <- 20260710L
 bootstrap_replicates <- 10000L
@@ -313,7 +307,84 @@ write.csv(
   row.names = FALSE
 )
 
+# Save the threshold-specific count tables used by the two concordance plots.
+cross_count_source <- cross_source %>%
+  transmute(
+    assigned_pre = assigned_sre,
+    largest_gia_component = majority_ga,
+    n
+  )
+cross_gt70_count_source <- cohort %>%
+  filter(majority_ga_proportion > 0.70) %>%
+  count(
+    assigned_pre = assigned_sre,
+    largest_gia_component = majority_ga,
+    name = "n"
+  )
+write.csv(
+  cross_count_source,
+  file.path(table_dir, "figure1_cross_classification_all.csv"),
+  row.names = FALSE
+)
+write.csv(
+  cross_gt70_count_source,
+  file.path(table_dir, "figure1_cross_classification_gt70.csv"),
+  row.names = FALSE
+)
+
+# Save the continuous GIA values corresponding to directly mapped PRE categories.
+pre_to_gia <- c(Hispanic = "AMR", White = "EUR", Black = "AFR", SAS = "SAS", EAS = "EAS")
+corresponding_gia_source <- cohort %>%
+  filter(as.character(assigned_sre) %in% names(pre_to_gia)) %>%
+  mutate(
+    mapped_component = unname(pre_to_gia[as.character(assigned_sre)]),
+    corresponding_gia_proportion = case_when(
+      mapped_component == "AMR" ~ AMR,
+      mapped_component == "AFR" ~ AFR,
+      mapped_component == "EUR" ~ EUR,
+      mapped_component == "SAS" ~ SAS,
+      mapped_component == "EAS" ~ EAS
+    ),
+    display_group = paste0(as.character(assigned_sre), " → ", mapped_component)
+  ) %>%
+  transmute(
+    anonymous_plot_index = row_number(),
+    display_group,
+    mapped_component,
+    corresponding_gia_proportion
+  )
+write.csv(
+  corresponding_gia_source,
+  file.path(table_dir, "figure1_corresponding_gia_source_restricted_internal.csv"),
+  row.names = FALSE
+)
+
 sre_to_ga <- c(Hispanic = "AMR", White = "EUR", Black = "AFR", SAS = "SAS", EAS = "EAS")
+# Calculate agreement after progressively restricting to concentrated GIA profiles.
+threshold_sensitivity <- bind_rows(lapply(seq(0, 0.90, 0.05), function(threshold) {
+  subset <- cohort %>%
+    filter(
+      as.character(assigned_sre) %in% names(sre_to_ga),
+      majority_ga_proportion > threshold
+    )
+  metrics <- cohen_kappa(
+    unname(sre_to_ga[as.character(subset$assigned_sre)]),
+    as.character(subset$majority_ga),
+    ancestry_levels
+  )
+  data.frame(
+    threshold = threshold,
+    n_retained = nrow(subset),
+    observed_agreement = unname(metrics$observed),
+    kappa = unname(metrics$kappa)
+  )
+}))
+write.csv(
+  threshold_sensitivity,
+  file.path(table_dir, "maximum_gia_threshold_sensitivity.csv"),
+  row.names = FALSE
+)
+
 kappa_keep <- as.character(cohort$assigned_sre) %in% names(sre_to_ga)
 kappa_sre <- unname(sre_to_ga[as.character(cohort$assigned_sre[kappa_keep])])
 kappa_ga <- as.character(cohort$majority_ga[kappa_keep])
@@ -439,6 +510,21 @@ write.csv(
   row.names = FALSE
 )
 
+# Plot annotations read these estimates instead of recomputing statistics.
+write.csv(
+  data.frame(
+    mean_difference_bits = entropy_mean_difference,
+    mean_difference_ci_low = entropy_mean_ci[1],
+    mean_difference_ci_high = entropy_mean_ci[2],
+    cliffs_delta = entropy_cliffs_delta,
+    cliffs_delta_ci_low = entropy_delta_ci[1],
+    cliffs_delta_ci_high = entropy_delta_ci[2],
+    wilcoxon_p = entropy_wilcox$p.value
+  ),
+  file.path(table_dir, "entropy_plot_annotation.csv"),
+  row.names = FALSE
+)
+
 entropy_sre_tests <- lapply(sre_levels, function(sre_name) {
   group_data <- cohort %>% filter(assigned_sre == sre_name)
   x <- group_data$entropy_bits[group_data$reporting_status == "Multiple"]
@@ -466,53 +552,7 @@ write.csv(
   row.names = FALSE
 )
 
-# Plot styling ----
-
-ancestry_palette <- c(
-  AMR = "#E69F00", # orange
-  AFR = "#D55E00", # vermillion
-  EUR = "#0072B2", # blue
-  SAS = "#009E73", # bluish green
-  EAS = "#CC79A7"  # reddish purple
-)
-sre_palette <- c(
-  Hispanic = ancestry_palette[["AMR"]],
-  White = ancestry_palette[["EUR"]],
-  `Middle Eastern` = "#56B4E9",
-  Black = ancestry_palette[["AFR"]],
-  SAS = ancestry_palette[["SAS"]],
-  EAS = ancestry_palette[["EAS"]],
-  `Native American` = "#F0E442",
-  `Other/Unknown` = "#8C8C8C"
-)
-status_palette <- c(
-  `Single/no multiple report` = "#0072B2",
-  Multiple = "#D55E00"
-)
-
-theme_journal <- function(base_size = 10) {
-  theme_classic(base_size = base_size, base_family = "sans") +
-    theme(
-      plot.title = element_text(face = "bold", size = rel(1.05), hjust = 0),
-      plot.subtitle = element_text(color = "grey30", size = rel(0.9), hjust = 0),
-      axis.title = element_text(face = "plain"),
-      axis.text = element_text(color = "black"),
-      legend.title = element_text(face = "bold"),
-      legend.key.height = grid::unit(0.42, "cm"),
-      plot.margin = margin(8, 10, 8, 8)
-    )
-}
-
-group_boundaries <- function(data, group_column) {
-  data %>%
-    group_by(.data[[group_column]]) %>%
-    summarise(
-      start = min(plot_index),
-      end = max(plot_index),
-      center = (start + end) / 2,
-      .groups = "drop"
-    )
-}
+# Figure source tables ----
 
 # Reference and study ancestry profiles ----
 
@@ -600,318 +640,14 @@ write.csv(
   row.names = FALSE
 )
 
-reference_long <- reference_plot %>%
-  select(plot_index, SuperPop, Population, all_of(ancestry_levels)) %>%
-  pivot_longer(all_of(ancestry_levels), names_to = "ancestry", values_to = "proportion") %>%
-  mutate(ancestry = factor(ancestry, levels = ancestry_levels))
-cohort_long <- cohort_plot %>%
-  select(plot_index, assigned_sre, all_of(ancestry_levels)) %>%
-  pivot_longer(all_of(ancestry_levels), names_to = "ancestry", values_to = "proportion") %>%
-  mutate(ancestry = factor(ancestry, levels = ancestry_levels))
-
-reference_groups <- group_boundaries(reference_plot, "Population")
-cohort_groups <- group_boundaries(cohort_plot, "assigned_sre")
-
-figure1a <- ggplot(reference_long, aes(plot_index, proportion, fill = ancestry)) +
-  geom_col(width = 1, linewidth = 0) +
-  geom_vline(
-    data = reference_groups[-nrow(reference_groups), , drop = FALSE],
-    aes(xintercept = end + 0.5),
-    color = "white",
-    linewidth = 0.25
-  ) +
-  scale_fill_manual(values = ancestry_palette, breaks = ancestry_levels, drop = FALSE) +
-  scale_x_continuous(
-    breaks = reference_groups$center,
-    labels = as.character(reference_groups$Population),
-    expand = expansion(mult = c(0, 0))
-  ) +
-  scale_y_continuous(
-    breaks = seq(0, 1, 0.25),
-    labels = label_percent(accuracy = 1),
-    expand = expansion(mult = c(0, 0))
-  ) +
-  coord_cartesian(ylim = c(0, 1), expand = FALSE) +
-  labs(
-    title = sprintf(
-      "A  1000 Genomes homogeneous references (n = %s)",
-      format(nrow(reference_plot), big.mark = ",", scientific = FALSE, trim = TRUE)
-    ),
-    subtitle = sprintf(
-      "Selected by maximum unsupervised K=5 ancestry proportion >%.2f",
-      reference_threshold
-    ),
-    x = NULL,
-    y = "Ancestry proportion",
-    fill = "Ancestry component"
-  ) +
-  theme_journal(9) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 7),
-    legend.position = "bottom"
-  )
-
-figure1b <- ggplot(cohort_long, aes(plot_index, proportion, fill = ancestry)) +
-  geom_col(width = 1, linewidth = 0) +
-  geom_vline(
-    data = cohort_groups[-nrow(cohort_groups), , drop = FALSE],
-    aes(xintercept = end + 0.5),
-    color = "white",
-    linewidth = 0.35
-  ) +
-  scale_fill_manual(values = ancestry_palette, breaks = ancestry_levels, drop = FALSE) +
-  scale_x_continuous(
-    breaks = cohort_groups$center,
-    labels = as.character(cohort_groups$assigned_sre),
-    expand = expansion(mult = c(0, 0))
-  ) +
-  scale_y_continuous(
-    breaks = seq(0, 1, 0.25),
-    labels = label_percent(accuracy = 1),
-    expand = expansion(mult = c(0, 0))
-  ) +
-  coord_cartesian(ylim = c(0, 1), expand = FALSE) +
-  labs(
-    title = "B  Screen-positive newborn cohort (n = 378)",
-    subtitle = "Supervised K=5 estimates grouped by assigned PRE",
-    x = "Assigned PRE",
-    y = "Ancestry proportion",
-    fill = "Ancestry component"
-  ) +
-  theme_journal(9) +
-  theme(
-    axis.text.x = element_text(angle = 25, hjust = 1, vjust = 1, size = 8),
-    legend.position = "bottom"
-  )
-
-figure1 <- (figure1a / figure1b) +
-  plot_layout(heights = c(1.05, 1), guides = "collect") &
-  theme(legend.position = "bottom")
-save_figure_pair(
-  figure1,
-  figure_dir,
-  "reference_and_study_ancestry",
-  width = 12,
-  height = 7.4
-)
-
-# PRE by largest GIA component ----
-
-figure2_heat <- cross_source %>%
-  mutate(
-    label = ifelse(n == 0, "", sprintf("%d\n%s", n, percent(row_proportion, accuracy = 1))),
-    text_color = ifelse(n >= 40, "white", "black"),
-    assigned_sre_plot = factor(assigned_sre, levels = rev(sre_levels))
-  )
-
-figure2a <- ggplot(
-  figure2_heat,
-  aes(majority_ga, assigned_sre_plot, fill = n)
-) +
-  geom_tile(color = "white", linewidth = 0.6) +
-  geom_text(aes(label = label, color = text_color), size = 3.1, lineheight = 0.9) +
-  scale_color_identity() +
-  scale_fill_gradient(low = "#F7FBFF", high = "#0072B2", name = "Count") +
-  labs(
-    title = "A  Exact cross-classification",
-    subtitle = "Cell labels show count and row percentage",
-    x = "Majority genetic ancestry",
-    y = "Assigned PRE"
-  ) +
-  coord_fixed(ratio = 0.65) +
-  theme_journal(9) +
-  theme(panel.border = element_rect(color = "grey35", fill = NA, linewidth = 0.5))
-
-figure2b <- ggplot(
-  cross_source,
-  aes(assigned_sre, row_proportion, fill = majority_ga)
-) +
-  geom_col(width = 0.72, color = "white", linewidth = 0.2) +
-  scale_fill_manual(values = ancestry_palette, breaks = ancestry_levels, drop = FALSE) +
-  scale_y_continuous(
-    limits = c(0, 1),
-    labels = label_percent(accuracy = 1),
-    expand = expansion(mult = c(0, 0))
-  ) +
-  labs(
-    title = "B  Largest GIA component within PRE",
-    x = "Assigned PRE",
-    y = "Within-PRE proportion",
-    fill = "Majority GA"
-  ) +
-  theme_journal(9) +
-  theme(axis.text.x = element_text(angle = 35, hjust = 1), legend.position = "bottom")
-
-figure2c <- ggplot(
-  cross_source,
-  aes(majority_ga, column_proportion, fill = assigned_sre)
-) +
-  geom_col(width = 0.72, color = "white", linewidth = 0.2) +
-  scale_fill_manual(values = sre_palette, breaks = sre_levels, drop = FALSE) +
-  scale_y_continuous(
-    limits = c(0, 1),
-    labels = label_percent(accuracy = 1),
-    expand = expansion(mult = c(0, 0))
-  ) +
-  labs(
-    title = "C  PRE within largest GIA component",
-    x = "Majority genetic ancestry",
-    y = "Within-GA proportion",
-    fill = "Assigned PRE"
-  ) +
-  theme_journal(9) +
-  theme(legend.position = "bottom")
-
-figure2 <- figure2a / (figure2b | figure2c) +
-  plot_layout(heights = c(1.15, 1))
-save_figure_pair(
-  figure2,
-  figure_dir,
-  "pre_largest_gia_concordance",
-  width = 12,
-  height = 9.2
-)
-
-# Entropy by PRE reporting status ----
-
-figure3a <- ggplot(
-  cohort,
-  aes(assigned_sre, entropy_bits, color = reporting_status, fill = reporting_status)
-) +
-  geom_boxplot(
-    width = 0.62,
-    position = position_dodge(width = 0.72),
-    outlier.shape = NA,
-    alpha = 0.15,
-    linewidth = 0.55
-  ) +
-  geom_point(
-    position = position_jitterdodge(jitter.width = 0.18, dodge.width = 0.72),
-    alpha = 0.55,
-    size = 1.05,
-    stroke = 0
-  ) +
-  scale_color_manual(values = status_palette, drop = FALSE) +
-  scale_fill_manual(values = status_palette, drop = FALSE) +
-  scale_y_continuous(
-    breaks = seq(0, 2, 0.5),
-    expand = expansion(mult = c(0, 0.03))
-  ) +
-  coord_cartesian(ylim = c(0, log2(5))) +
-  labs(
-    title = "A  Ancestry entropy by assigned PRE",
-    subtitle = "Entropy is calculated in bits across the five ADMIXTURE proportions",
-    x = "Assigned PRE",
-    y = "Shannon entropy (bits)",
-    color = "PRE reporting status",
-    fill = "PRE reporting status"
-  ) +
-  theme_journal(9) +
-  theme(
-    axis.text.x = element_text(angle = 35, hjust = 1),
-    legend.position = "bottom"
-  )
-
-entropy_annotation <- sprintf(
-  paste0(
-    "Mean difference = %.3f bits\nbootstrap 95%% CI %.3f to %.3f\n",
-    "Cliff's delta = %.3f (95%% CI %.3f to %.3f)\nWilcoxon p = %s"
-  ),
-  entropy_mean_difference,
-  entropy_mean_ci[1],
-  entropy_mean_ci[2],
-  entropy_cliffs_delta,
-  entropy_delta_ci[1],
-  entropy_delta_ci[2],
-  format_p_value(entropy_wilcox$p.value)
-)
-
-figure3b <- ggplot(
-  cohort,
-  aes(reporting_status, entropy_bits, fill = reporting_status, color = reporting_status)
-) +
-  geom_violin(width = 0.78, alpha = 0.15, linewidth = 0.55, trim = FALSE) +
-  geom_boxplot(width = 0.23, outlier.shape = NA, alpha = 0.35, linewidth = 0.55) +
-  geom_jitter(width = 0.09, alpha = 0.42, size = 1.05, stroke = 0) +
-  annotate(
-    "label",
-    x = 1.5,
-    y = 2.18,
-    label = entropy_annotation,
-    hjust = 0.5,
-    vjust = 1,
-    size = 3.0,
-    label.size = 0.25,
-    fill = "white"
-  ) +
-  scale_fill_manual(values = status_palette, drop = FALSE) +
-  scale_color_manual(values = status_palette, drop = FALSE) +
-  scale_y_continuous(
-    breaks = seq(0, 2, 0.5),
-    expand = expansion(mult = c(0, 0.03))
-  ) +
-  coord_cartesian(ylim = c(0, log2(5))) +
-  scale_x_discrete(labels = c("Single/no\nmultiple report", "Multiple")) +
-  labs(
-    title = "B  Overall single-vs-multiple comparison",
-    x = NULL,
-    y = "Shannon entropy (bits)"
-  ) +
-  theme_journal(9) +
-  theme(legend.position = "none")
-
-figure3 <- figure3a | figure3b
-save_figure_pair(
-  figure3,
-  figure_dir,
-  "entropy_by_pre_and_reporting_status",
-  width = 12,
-  height = 5.9
-)
-
 # Multiple-PRE ancestry profiles ----
 
 multi_indices <- which(cohort$reporting_status == "Multiple")
-multi_plot <- cohort[multi_indices, , drop = FALSE]
 multi_raw_race <- cohort_raw[multi_indices, race_columns, drop = FALSE]
 multi_combinations <- apply(multi_raw_race, 1, function(values) {
   categories <- unique(na.omit(vapply(values, harmonize_pre_value, character(1))))
   paste(categories, collapse = " + ")
 })
-multi_plot$reported_sre_combination <- multi_combinations
-multi_plot <- multi_plot %>%
-  mutate(
-    assigned_sre = factor(assigned_sre, levels = sre_levels),
-    expected_component = unname(expected_component_for_sre[as.character(assigned_sre)]),
-    expected_proportion = case_when(
-      expected_component == "AMR" ~ AMR,
-      expected_component == "AFR" ~ AFR,
-      expected_component == "EUR" ~ EUR,
-      expected_component == "SAS" ~ SAS,
-      expected_component == "EAS" ~ EAS,
-      TRUE ~ majority_ga_proportion
-    )
-  ) %>%
-  arrange(assigned_sre, reported_sre_combination, majority_ga, desc(expected_proportion)) %>%
-  mutate(plot_index = row_number())
-write.csv(
-  multi_plot %>%
-    transmute(
-      anonymous_plot_index = plot_index,
-      assigned_sre,
-      reported_sre_combination,
-      majority_ga,
-      majority_ga_proportion,
-      AMR,
-      AFR,
-      EUR,
-      SAS,
-      EAS
-    ),
-  file.path(table_dir, "figure4_multisre_admixture_source_restricted_internal.csv"),
-  row.names = FALSE
-)
-
 multi_raw_categories <- lapply(seq_len(nrow(multi_raw_race)), function(i) {
   unique(na.omit(vapply(multi_raw_race[i, ], harmonize_pre_value, character(1))))
 })
@@ -935,6 +671,25 @@ multi_with_key <- multi_with_key %>%
   ) %>%
   arrange(assigned_sre, reported_sre_combination, majority_ga, desc(expected_proportion), temp_row_key) %>%
   mutate(plot_index = row_number())
+
+# Save ancestry profiles and PRE-selection tiles in one synchronized order.
+write.csv(
+  multi_with_key %>%
+    transmute(
+      anonymous_plot_index = plot_index,
+      assigned_sre,
+      reported_sre_combination,
+      majority_ga,
+      majority_ga_proportion,
+      AMR,
+      AFR,
+      EUR,
+      SAS,
+      EAS
+    ),
+  file.path(table_dir, "figure4_multisre_admixture_source_restricted_internal.csv"),
+  row.names = FALSE
+)
 selection_tile_source <- expand_grid(
   plot_index = multi_with_key$plot_index,
   reported_category = sre_levels
@@ -945,15 +700,7 @@ selection_tile_source <- expand_grid(
   ) %>%
   rowwise() %>%
   mutate(present = reported_category %in% multi_raw_categories[[temp_row_key]]) %>%
-  ungroup() %>%
-  mutate(
-    reported_category = factor(reported_category, levels = rev(sre_levels)),
-    tile_fill = ifelse(
-      present,
-      sre_palette[as.character(reported_category)],
-      "#F1F1F1"
-    )
-  )
+  ungroup()
 
 write.csv(
   selection_tile_source %>%
@@ -966,82 +713,6 @@ write.csv(
   row.names = FALSE
 )
 
-multi_long <- multi_with_key %>%
-  select(plot_index, assigned_sre, all_of(ancestry_levels)) %>%
-  pivot_longer(all_of(ancestry_levels), names_to = "ancestry", values_to = "proportion") %>%
-  mutate(ancestry = factor(ancestry, levels = ancestry_levels))
-multi_groups <- group_boundaries(multi_with_key, "assigned_sre")
-
-figure4a <- ggplot(multi_long, aes(plot_index, proportion, fill = ancestry)) +
-  geom_col(width = 1, linewidth = 0) +
-  geom_vline(
-    data = multi_groups[-nrow(multi_groups), , drop = FALSE],
-    aes(xintercept = end + 0.5),
-    color = "white",
-    linewidth = 0.5
-  ) +
-  scale_fill_manual(values = ancestry_palette, breaks = ancestry_levels, drop = FALSE) +
-  scale_x_continuous(
-    breaks = multi_groups$center,
-    labels = as.character(multi_groups$assigned_sre),
-    expand = expansion(mult = c(0, 0))
-  ) +
-  scale_y_continuous(
-    breaks = seq(0, 1, 0.25),
-    labels = label_percent(accuracy = 1),
-    expand = expansion(mult = c(0, 0))
-  ) +
-  coord_cartesian(ylim = c(0, 1), expand = FALSE) +
-  labs(
-    title = "A  Genetic ancestry profiles among participants with multiple PRE selections (n = 52)",
-    x = "Assigned PRE",
-    y = "Ancestry proportion",
-    fill = "Ancestry component"
-  ) +
-  theme_journal(9) +
-  theme(
-    axis.text.x = element_text(angle = 25, hjust = 1),
-    legend.position = "bottom"
-  )
-
-figure4b <- ggplot(
-  selection_tile_source,
-  aes(plot_index, reported_category, fill = tile_fill)
-) +
-  geom_tile(color = "white", linewidth = 0.25) +
-  geom_vline(
-    data = multi_groups[-nrow(multi_groups), , drop = FALSE],
-    aes(xintercept = end + 0.5),
-    color = "grey35",
-    linewidth = 0.35
-  ) +
-  scale_fill_identity() +
-  scale_x_continuous(
-    limits = c(0.5, nrow(multi_with_key) + 0.5),
-    expand = expansion(mult = c(0, 0)),
-    breaks = NULL
-  ) +
-  labs(
-    title = "B  Harmonized reported PRE selections in the same anonymous order",
-    x = NULL,
-    y = "Reported selection"
-  ) +
-  theme_journal(9) +
-  theme(
-    axis.line = element_blank(),
-    axis.ticks = element_blank(),
-    panel.border = element_rect(color = "grey60", fill = NA, linewidth = 0.4)
-  )
-
-figure4 <- figure4a / figure4b + plot_layout(heights = c(2.8, 1.55))
-save_figure_pair(
-  figure4,
-  figure_dir,
-  "multiple_pre_ancestry_profiles",
-  width = 12,
-  height = 7.8
-)
-
 # Privacy guard: no output table may contain source sample identifiers.
 output_tables <- list.files(table_dir, pattern = "\\.csv$", full.names = TRUE)
 for (table_path in output_tables) {
@@ -1052,4 +723,4 @@ for (table_path in output_tables) {
 }
 
 message("Descriptive analysis complete.")
-message("Figures: ", figure_dir)
+message("Tables: ", table_dir)

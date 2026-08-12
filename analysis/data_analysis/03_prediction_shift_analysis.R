@@ -6,7 +6,7 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+project_root <- normalizePath(file.path(dirname(script_path), "..", ".."), mustWork = TRUE)
 helper_dir <- file.path(project_root, "R")
 source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))
@@ -15,8 +15,6 @@ source(file.path(helper_dir, "statistical_helpers.R"))
 suppressPackageStartupMessages({
   library(data.table)
   library(readxl)
-  library(ggplot2)
-  library(patchwork)
 })
 
 parse_args <- function(args) {
@@ -62,9 +60,7 @@ source_table_dir <- file.path(source_run_dir, "tables")
 
 run_dir <- file.path(analysis_dir, "runs", args$run_name)
 table_dir <- file.path(run_dir, "tables")
-figure_dir <- file.path(run_dir, "figures")
 dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 cat("Figure 4 GIA case-pattern analysis\n")
 cat("Start time:", format(Sys.time(), tz = "America/New_York"), "\n")
@@ -72,16 +68,6 @@ cat("Source RF run:", source_run_dir, "\n")
 cat("Output run:", run_dir, "\n")
 
 # Reconstruct the analysis cohort ----
-
-rel_path <- function(path) {
-  path <- normalizePath(path, mustWork = FALSE)
-  prefix <- paste0(project_root, .Platform$file.sep)
-  if (startsWith(path, prefix)) {
-    substring(path, nchar(prefix) + 1L)
-  } else {
-    file.path("external", basename(path))
-  }
-}
 
 input_files <- c(
   phenotype_workbook = file.path(input_dir, "Scharfelab-NBS1474samples-250207.xlsx"),
@@ -427,6 +413,29 @@ gia_confidence_summary[, display_label := paste0(
 fwrite(gia_confidence_summary, file.path(table_dir, "gia_confidence_score_shift_summary.csv"))
 fwrite(gia_confidence_composition, file.path(table_dir, "gia_confidence_outcome_composition.csv"))
 
+# Save a plot-ready aggregate table with stable labels and percentage-point units.
+confidence_plot_source <- copy(gia_confidence_summary)
+confidence_plot_source[, confidence_group := fifelse(
+  grepl(">", majority_GIA_confidence, fixed = TRUE),
+  paste0(">", round(args$confidence_cutoff * 100), "%"),
+  paste0(intToUtf8(8804), round(args$confidence_cutoff * 100), "%")
+)]
+confidence_plot_source[, outcome_name := fifelse(outcome == "TP", "TP", "FP")]
+confidence_plot_source[, `:=`(
+  row_label = paste0(confidence_group, ", ", outcome_name, " (n = ", n, ")"),
+  estimate_pp = 100 * mean_probability_change,
+  low_pp = 100 * change_ci_low,
+  high_pp = 100 * change_ci_high,
+  estimate_label = sprintf("%+.2f", 100 * mean_probability_change)
+)]
+fwrite(
+  confidence_plot_source[, .(
+    confidence_group, outcome, n, row_label,
+    estimate_pp, low_pp, high_pp, estimate_label
+  )],
+  file.path(table_dir, "figure4_confidence_shift_plot_source_aggregate.csv")
+)
+
 continuous_features <- c(
   "majority_GIA_proportion", "shannon_entropy_bits", "normalized_entropy",
   "PRE_aligned_GIA_proportion"
@@ -479,7 +488,7 @@ raw_score_associations <- rbindlist(lapply(c("TP", "FP"), function(outcome_group
 }))
 fwrite(raw_score_associations, file.path(table_dir, "raw_score_change_associations.csv"))
 
-# Figure source tables and plot ----
+# Figure source tables ----
 
 individual_plot_source <- subject[, .(
   analysis_id, outcome, correct_direction_shift, benefit_direction,
@@ -488,6 +497,21 @@ individual_plot_source <- subject[, .(
 individual_plot_source[, outcome := factor(outcome, levels = c("TP", "FP"))]
 individual_plot_source[, rank_within_outcome := frank(correct_direction_shift, ties.method = "first"), by = outcome]
 fwrite(individual_plot_source, file.path(table_dir, "figure4_panel_a_source_restricted_internal.csv"))
+
+# This reduced source is the only subject-level table needed by the final shift plot.
+subject_shift_plot_source <- subject[, .(
+  outcome,
+  outcome_label = fifelse(
+    outcome == "FP",
+    paste0("False positive (n = ", sum(outcome == "FP"), ")"),
+    paste0("True positive (n = ", sum(outcome == "TP"), ")")
+  ),
+  shift_pp = 100 * correct_direction_shift
+)]
+fwrite(
+  subject_shift_plot_source,
+  file.path(table_dir, "figure4_subject_shift_plot_source_restricted_internal.csv")
+)
 
 stratum_order <- c(
   "All subjects",
@@ -527,127 +551,6 @@ operational_plot_source[, outcome_label := factor(
   labels = c("True-positive newborns", "False-positive newborns")
 )]
 fwrite(operational_plot_source, file.path(table_dir, "figure4_panel_c_source_aggregate.csv"))
-
-theme_publication <- function(base_size = 10) {
-  theme_classic(base_size = base_size, base_family = "Helvetica") +
-    theme(
-      axis.text = element_text(color = "black"),
-      axis.title = element_text(color = "black"),
-      strip.background = element_blank(),
-      strip.text = element_text(face = "bold", color = "black"),
-      legend.title = element_blank(),
-      plot.margin = margin(7, 9, 7, 7),
-      plot.tag = element_text(face = "bold", size = 13)
-    )
-}
-
-direction_colors <- c(
-  "Moved toward correct outcome" = "#00796B",
-  "Moved away from correct outcome" = "#D95F02",
-  "No change" = "#7F7F7F"
-)
-outcome_colors <- c(TP = "#0072B2", FP = "#CC79A7")
-impact_colors <- c(
-  "Beneficial change" = "#009E73",
-  "Harmful change" = "#D55E00",
-  "No change" = "#D9D9D9"
-)
-
-panel_a <- ggplot(
-  individual_plot_source,
-  aes(
-    x = rank_within_outcome,
-    y = 100 * correct_direction_shift,
-    fill = benefit_direction
-  )
-) +
-  geom_hline(yintercept = 0, color = "black", linewidth = 0.35) +
-  geom_col(width = 0.88, linewidth = 0) +
-  facet_wrap(
-    ~ outcome,
-    nrow = 1,
-    scales = "free_x",
-    labeller = as_labeller(c(TP = "True-positive newborns", FP = "False-positive newborns"))
-  ) +
-  scale_fill_manual(values = direction_colors) +
-  labs(
-    x = "Newborns ordered by individual change",
-    y = "Probability shift toward correct outcome\n(percentage points)"
-  ) +
-  theme_publication(10) +
-  theme(
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank(),
-    legend.position = "bottom"
-  )
-
-panel_b <- ggplot(
-  gia_confidence_summary,
-  aes(
-    x = 100 * mean_probability_change,
-    y = display_label,
-    color = outcome
-  )
-) +
-  geom_vline(xintercept = 0, color = "grey50", linetype = "dashed", linewidth = 0.45) +
-  geom_errorbarh(
-    aes(
-      xmin = 100 * change_ci_low,
-      xmax = 100 * change_ci_high
-    ),
-    height = 0.13,
-    linewidth = 0.62,
-    position = position_dodge(width = 0.36)
-  ) +
-  geom_point(
-    size = 3.2,
-    position = position_dodge(width = 0.36),
-    stroke = 0.45
-  ) +
-  scale_color_manual(
-    values = outcome_colors,
-    breaks = c("TP", "FP"),
-    labels = c("True positive", "False positive")
-  ) +
-  labs(
-    x = "Mean change in predicted true-positive probability\nafter adding GIA (percentage points; bootstrap 95% CI)",
-    y = NULL
-  ) +
-  theme_publication(10) +
-  theme(
-    legend.position = "bottom"
-  )
-
-panel_c <- ggplot(
-  operational_plot_source,
-  aes(x = disposition_both, y = disposition_pre, fill = operational_impact)
-) +
-  geom_tile(color = "white", linewidth = 1.1) +
-  geom_text(aes(label = N), size = 5, fontface = "bold") +
-  facet_wrap(~ outcome_label, nrow = 1) +
-  scale_fill_manual(values = impact_colors) +
-  scale_x_discrete(position = "top") +
-  coord_fixed(ratio = 0.78) +
-  labs(
-    x = "Disposition with PRE + GIA model",
-    y = "Disposition with PRE model"
-  ) +
-  theme_publication(10) +
-  theme(
-    axis.line = element_blank(),
-    axis.ticks = element_blank(),
-    panel.spacing = grid::unit(1.1, "lines"),
-    legend.position = "bottom"
-  )
-
-figure <- panel_a / panel_b / panel_c +
-  plot_layout(heights = c(1.05, 0.72, 1.02), guides = "keep") +
-  plot_annotation(tag_levels = "A")
-
-pdf_path <- file.path(figure_dir, "Figure4_GIA_incremental_case_patterns_analysis.pdf")
-png_path <- file.path(figure_dir, "Figure4_GIA_incremental_case_patterns_analysis.png")
-ggsave(pdf_path, figure, width = 10.5, height = 13.0, device = cairo_pdf, bg = "white")
-ggsave(png_path, figure, width = 10.5, height = 13.0, dpi = 300, bg = "white")
 
 # Aggregate report ----
 
@@ -697,5 +600,5 @@ cat("\nContinuous exploratory associations:\n")
 print(continuous_associations)
 cat("\nRaw score-change associations:\n")
 print(raw_score_associations)
-cat("\nFigure:\n", rel_path(pdf_path), "\n", rel_path(png_path), "\n", sep = "")
+cat("\nFigure source tables:\n", table_dir, "\n", sep = "")
 cat("End time:", format(Sys.time(), tz = "America/New_York"), "\n")

@@ -7,7 +7,7 @@ script_path <- normalizePath(
   sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
   mustWork = TRUE
 )
-project_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+project_root <- normalizePath(file.path(dirname(script_path), "..", ".."), mustWork = TRUE)
 helper_dir <- file.path(project_root, "R")
 source(file.path(helper_dir, "ancestry_helpers.R"))
 source(file.path(helper_dir, "pre_helpers.R"))
@@ -18,8 +18,6 @@ suppressPackageStartupMessages({
   library(readxl)
   library(randomForest)
   library(pROC)
-  library(ggplot2)
-  library(patchwork)
 })
 
 parse_args <- function(args) {
@@ -88,9 +86,7 @@ args <- parse_args(commandArgs(trailingOnly = TRUE))
 
 run_dir <- file.path(analysis_dir, "runs", args$run_name)
 table_dir <- file.path(run_dir, "tables")
-figure_dir <- file.path(run_dir, "figures")
 dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 cat("MMA four-model analysis after excluding newborns receiving TPN\n")
 cat("Start time:", format(Sys.time(), tz = "America/New_York"), "\n")
@@ -106,16 +102,6 @@ input_files <- c(
   admixture_fam = file.path(input_dir, "1000G_378.fam"),
   reference_metadata = file.path(input_dir, "all_phase3.psam")
 )
-
-rel_path <- function(path) {
-  path <- normalizePath(path, mustWork = FALSE)
-  prefix <- paste0(project_root, .Platform$file.sep)
-  if (startsWith(path, prefix)) {
-    substring(path, nchar(prefix) + 1L)
-  } else {
-    file.path("external", basename(path))
-  }
-}
 
 numeric_clean <- function(x) suppressWarnings(as.numeric(as.character(x)))
 
@@ -923,126 +909,6 @@ importance_order <- importance_summary[group_id %in% selected_importance_groups]
 importance_plot_source[, display_label := factor(display_label, levels = importance_order)]
 fwrite(importance_plot_source, file.path(table_dir, "figure_panel_b_source.csv"))
 
-model_colors <- c(
-  "Clinical + metabolites" = "#7F7F7F",
-  "Clinical + metabolites + PRE" = "#0072B2",
-  "Clinical + metabolites + GIA" = "#D55E00",
-  "Clinical + metabolites + PRE + GIA" = "#009E73"
-)
-model_plot_labels <- c(
-  "Clinical + metabolites" = "Clinical + metabolites",
-  "Clinical + metabolites + PRE" = "+ PRE",
-  "Clinical + metabolites + GIA" = "+ GIA",
-  "Clinical + metabolites + PRE + GIA" = "+ PRE + GIA"
-)
-importance_colors <- c(
-  Clinical = "#6C757D",
-  Metabolite = "#56B4E9",
-  PRE = "#0072B2",
-  GIA = "#D55E00"
-)
-
-# Diagnostic plot ----
-
-theme_publication <- function(base_size = 10) {
-  theme_classic(base_size = base_size, base_family = "sans") +
-    theme(
-      axis.text = element_text(color = "black"),
-      axis.title = element_text(color = "black"),
-      plot.title = element_text(face = "bold", size = rel(1.05)),
-      strip.background = element_blank(),
-      strip.text = element_text(face = "bold"),
-      legend.title = element_blank(),
-      plot.margin = margin(6, 8, 6, 6)
-    )
-}
-
-panel_a <- ggplot(
-  performance_plot_source,
-  aes(x = model, y = estimate, fill = model, color = model)
-) +
-  geom_violin(trim = TRUE, scale = "width", alpha = 0.20, linewidth = 0.45) +
-  geom_boxplot(
-    width = 0.20,
-    outlier.shape = NA,
-    alpha = 0.72,
-    linewidth = 0.45
-  ) +
-  geom_jitter(width = 0.075, height = 0, alpha = 0.18, size = 0.65, stroke = 0) +
-  facet_wrap(~ metric, ncol = 2) +
-  coord_flip() +
-  scale_fill_manual(values = model_colors, labels = model_plot_labels) +
-  scale_color_manual(values = model_colors, labels = model_plot_labels) +
-  scale_x_discrete(labels = model_plot_labels) +
-  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
-  labs(
-    title = "A. Performance across repeated cross-validation runs",
-    x = NULL,
-    y = "Performance estimate"
-  ) +
-  theme_publication(9.5) +
-  theme(legend.position = "none")
-
-importance_means <- importance_plot_source[, .(
-  mean_importance = mean(importance_delta_brier)
-), by = .(display_label, feature_group)]
-
-panel_b <- ggplot(
-  importance_plot_source,
-  aes(x = importance_delta_brier, y = display_label, fill = feature_group)
-) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", linewidth = 0.45) +
-  geom_boxplot(width = 0.62, outlier.shape = NA, alpha = 0.62, linewidth = 0.42) +
-  geom_point(
-    data = importance_means,
-    aes(x = mean_importance, y = display_label),
-    inherit.aes = FALSE,
-    shape = 21,
-    fill = "white",
-    color = "black",
-    size = 1.8,
-    stroke = 0.45
-  ) +
-  scale_fill_manual(values = importance_colors) +
-  labs(
-    title = "B. Held-out permutation importance in the full model",
-    x = "Increase in Brier score after permutation",
-    y = NULL,
-    fill = NULL
-  ) +
-  theme_publication(9.5) +
-  theme(legend.position = "bottom")
-
-figure_caption_text <- paste0(
-  "Panel A distributions describe algorithmic stability; repeated CV runs are ",
-  "dependent and are not inferential confidence intervals. Within each training ",
-  "fold, 10 of 40 metabolite candidates were selected by absolute univariate AUC ",
-  "distance from 0.5 and shared across all four models. Panel B permutes each ",
-  "included clinical/metabolite predictor separately and PRE or GIA jointly within ",
-  "held-out folds; an unselected metabolite has zero pipeline-level contribution ",
-  "in that fold."
-)
-
-figure <- (panel_a | panel_b) +
-  plot_layout(widths = c(1.22, 1)) +
-  plot_annotation(
-    subtitle = paste0(
-      "MMA screen-positive newborns after excluding those receiving TPN: n=", nrow(model_data),
-      " (", sum(y == "TP"), " TP, ", sum(y == "FP"), " FP); ",
-      args$repeats, " repeated stratified ", args$folds, "-fold CV runs"
-    ),
-    caption = paste(strwrap(figure_caption_text, width = 180), collapse = "\n"),
-    theme = theme(
-      plot.subtitle = element_text(size = 10.5, hjust = 0),
-      plot.caption = element_text(size = 8, hjust = 0)
-    )
-  )
-
-pdf_path <- file.path(figure_dir, "mma_tpn0_four_model_performance_importance.pdf")
-png_path <- file.path(figure_dir, "mma_tpn0_four_model_performance_importance.png")
-ggsave(pdf_path, figure, width = 13.5, height = 7.4, device = cairo_pdf)
-ggsave(png_path, figure, width = 13.5, height = 7.4, dpi = 300, bg = "white")
-
 cat("\nCohort summary:\n")
 print(cohort_summary)
 cat("\nPrimary performance:\n")
@@ -1053,5 +919,5 @@ cat("\nMetabolite selection frequency:\n")
 print(metabolite_selection_summary[seq_len(min(15L, .N))])
 cat("\nTop permutation-importance groups:\n")
 print(importance_summary[seq_len(min(15L, .N))])
-cat("\nFigures:\n", rel_path(pdf_path), "\n", rel_path(png_path), "\n", sep = "")
+cat("\nFigure source tables:\n", table_dir, "\n", sep = "")
 cat("End time:", format(Sys.time(), tz = "America/New_York"), "\n")

@@ -9,9 +9,10 @@ results are not included.
 ## Repository structure
 
 ```text
-analysis/   Numbered analysis and figure scripts
-R/          Shared data-processing, statistical, and plotting functions
-GIA/        Upstream global-ancestry estimation code
+analysis/data_analysis/   Data preparation, statistical analysis, and modeling
+analysis/plotting/        One executable R script for each figure subplot
+R/                        Shared data-processing and statistical functions
+GIA/                      Upstream global-ancestry estimation code
 ```
 
 ## Requirements
@@ -20,7 +21,7 @@ The analysis was run with R 4.5.1 and the following packages:
 
 ```r
 install.packages(c(
-  "data.table", "dplyr", "ggplot2", "patchwork", "pROC",
+  "data.table", "dplyr", "ggplot2", "pROC",
   "ragg", "randomForest", "readxl", "scales", "tidyr"
 ))
 ```
@@ -55,35 +56,47 @@ The inputs can instead be stored elsewhere by setting `HGG_DATA_DIR`:
 export HGG_DATA_DIR="/secure/path/to/input/files"
 ```
 
-## Pipeline
+## Data analysis
 
-Run the scripts from the repository root in the order listed below:
+Run the four analysis scripts from the repository root. They write tables but
+do not create figures.
 
 ```sh
-Rscript analysis/00_descriptive_analysis.R
-Rscript analysis/01_cohort_characteristics.R
-Rscript analysis/02_figure1_pre_gia_concordance.R
-Rscript analysis/03_figure2_entropy_multiple_pre.R
-Rscript analysis/04_mma_random_forest.R
-Rscript analysis/06_figure3_model_performance.R
-Rscript analysis/07_figure4_prediction_shifts.R
-Rscript analysis/08_figure4_plot.R
+Rscript analysis/data_analysis/00_descriptive_analysis.R
+Rscript analysis/data_analysis/01_cohort_characteristics.R
+Rscript analysis/data_analysis/02_mma_random_forest.R
+Rscript analysis/data_analysis/03_prediction_shift_analysis.R
 ```
-
-The scripts run in this order:
 
 | Step | Script | Purpose |
 | --- | --- | --- |
-| 1 | `analysis/00_descriptive_analysis.R` | Prepare the 378-newborn ancestry/PRE dataset and descriptive source tables |
-| 2 | `analysis/01_cohort_characteristics.R` | Generate cohort characteristics and exclusion summaries |
-| 3 | `analysis/02_figure1_pre_gia_concordance.R` | Generate the PRE–GIA concordance and ancestry-threshold subfigures for Figure 1 |
-| 4 | `analysis/03_figure2_entropy_multiple_pre.R` | Compare ancestry entropy for single versus multiple PRE and draw Figure 2 |
-| 5 | `analysis/04_mma_random_forest.R` | Fit the four MMA random-forest models and estimate performance and importance |
-| 6 | `analysis/06_figure3_model_performance.R` | Draw model-performance and permutation-importance plots (Figure 3) |
-| 7 | `analysis/07_figure4_prediction_shifts.R` | Analyze individual prediction changes after adding GIA |
-| 8 | `analysis/08_figure4_plot.R` | Draw the final two-panel Figure 4 |
+| 1 | `analysis/data_analysis/00_descriptive_analysis.R` | Prepare the 378-newborn ancestry/PRE dataset and descriptive source tables |
+| 2 | `analysis/data_analysis/01_cohort_characteristics.R` | Generate cohort characteristics and exclusion summaries |
+| 3 | `analysis/data_analysis/02_mma_random_forest.R` | Fit the four MMA random-forest models and save performance and importance tables |
+| 4 | `analysis/data_analysis/03_prediction_shift_analysis.R` | Analyze individual prediction changes after adding GIA |
 
-The Figure 1 script saves each subfigure separately in PDF and PNG formats.
+## Plotting
+
+Each numbered script in `analysis/plotting/` reads saved analysis tables and
+exports one subplot as PDF and PNG. Run all subplot scripts with:
+
+```sh
+for script in analysis/plotting/[0-9][0-9]_*.R; do
+  Rscript "$script"
+done
+```
+
+The plotting scripts are:
+
+| Figure | Scripts |
+| --- | --- | --- |
+| Figure 1 | `01_figure1a_reference_ancestry.R` through `07_figure1g_threshold_sensitivity.R` |
+| Figure 2 | `08_figure2a_entropy_overall.R` through `11_figure2d_multiple_pre_selections.R` |
+| Figure 3 | `12_figure3a_model_performance.R` and `13_figure3b_permutation_importance.R` |
+| Figure 4 | `14_figure4a_subject_shifts.R` and `15_figure4b_confidence_shifts.R` |
+
+The repository deliberately does not include code that arranges or combines
+subplots into multi-panel figures.
 
 Outputs are written to `results/`. Set `HGG_RESULTS_DIR` to use a different
 location:
