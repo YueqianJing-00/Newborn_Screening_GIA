@@ -2,7 +2,8 @@
 
 # Plot Figure 1D: PRE-GIA cross-classification above 70% GIA concentration.
 
-source(file.path(dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)))), "plot_setup.R"))
+script_path <- normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)), mustWork = TRUE)
+source(file.path(dirname(script_path), "..", "..", "R", "plot_setup.R"))
 suppressPackageStartupMessages({
   library(dplyr)
   library(ggplot2)

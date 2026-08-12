@@ -2,7 +2,8 @@
 
 # Plot Figure 3A: repeated cross-validation performance for four RF models.
 
-source(file.path(dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)))), "plot_setup.R"))
+script_path <- normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)), mustWork = TRUE)
+source(file.path(dirname(script_path), "..", "..", "R", "plot_setup.R"))
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)

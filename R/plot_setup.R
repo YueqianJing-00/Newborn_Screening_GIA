@@ -1,6 +1,6 @@
 # Shared constants and export helpers for single-panel plotting scripts.
-# This support file does not create a plot; every executable R script in this
-# folder exports exactly one subplot.
+# This support file does not create a plot; every executable plotting script
+# exports exactly one subplot.
 
 script_file <- function() {
   normalizePath(

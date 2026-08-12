@@ -2,7 +2,8 @@
 
 # Plot Figure 3B: held-out permutation importance in the full RF model.
 
-source(file.path(dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)))), "plot_setup.R"))
+script_path <- normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)), mustWork = TRUE)
+source(file.path(dirname(script_path), "..", "..", "R", "plot_setup.R"))
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)

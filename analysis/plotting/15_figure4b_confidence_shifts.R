@@ -2,7 +2,8 @@
 
 # Plot Figure 4B: mean prediction shifts by GIA concentration and outcome.
 
-source(file.path(dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)))), "plot_setup.R"))
+script_path <- normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)), mustWork = TRUE)
+source(file.path(dirname(script_path), "..", "..", "R", "plot_setup.R"))
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)

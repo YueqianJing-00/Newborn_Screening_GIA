@@ -10,8 +10,8 @@ results are not included.
 
 ```text
 analysis/data_analysis/   Data preparation, statistical analysis, and modeling
-analysis/plotting/        One executable R script for each figure subplot
-R/                        Shared data-processing and statistical functions
+analysis/plotting/        One R script for each figure subplot
+R/                        Shared data-processing, statistical, and plot helpers
 GIA/                      Upstream global-ancestry estimation code
 ```
 
