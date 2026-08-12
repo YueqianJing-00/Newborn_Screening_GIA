@@ -53,13 +53,13 @@ ADMIXTURE reads the reference labels from `joint.pop` and estimates five ancestr
 
 Map the generated files to the manuscript inputs as follows:
 
-| Generated file | Role | Manuscript input name |
-| --- | --- | --- |
-| `reference_impact.5.Q` | MSK-IMPACT reference estimation and selection | `1000G_impact.5.Q` |
-| `reference_selected.labels.tsv` | Selected reference labels | `sample_pure.txt` |
-| `joint.5.Q` | Final MSK-IMPACT GIA estimates | `1000G_378.5.Q` |
-| `joint.fam` | Final reference and study sample order | `1000G_378.fam` |
-| Phase 3 PSAM metadata | Reference superpopulation metadata | `all_phase3.psam` |
+| Generated file | Role | 
+| --- | --- |
+| `reference_impact.5.Q` | MSK-IMPACT reference estimation and selection | 
+| `reference_selected.labels.tsv` | Selected reference labels | 
+| `joint.5.Q` | Final MSK-IMPACT GIA estimates |
+| `joint.fam` | Final reference and study sample order | 
+| Phase 3 PSAM metadata | Reference superpopulation metadata | 
 
 ## Privacy and review
 
