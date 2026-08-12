@@ -4,15 +4,9 @@ These scripts generate the global-ancestry files used by the manuscript analyses
 
 ## Software
 
-The workflow uses [PLINK 1.9 stable build 1.9.0-b.7.11 (19 August 2025)](https://www.cog-genomics.org/plink/1.9/) for every genotype operation and ADMIXTURE 1.3.0 for ancestry estimation. Install these programs and R before running the workflow, and make `plink`, `admixture`, and `Rscript` available on `PATH`. PLINK 2 is not required.
+The workflow uses [PLINK 1.9](https://www.cog-genomics.org/plink/1.9/) for every genotype operation and ADMIXTURE 1.3.0 for ancestry estimation. 
 
-Each script contains an editable path and parameter block near the top and accepts no command-line arguments. The scripts do not perform software or file preflight checks or create output directories.
-
-Edit the paths in each script, then create the configured output directories. For the example paths currently shown in the scripts:
-
-```bash
-mkdir -p /secure/work/global_reference /secure/work/global_joint
-```
+Edit the paths in each script, then create the configured output directories. 
 
 ## Global ancestry
 
